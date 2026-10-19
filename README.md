@@ -9,9 +9,9 @@ A modern, user-friendly GUI application for smooth scrolling on Windows. This is
 
 - **Smooth Scrolling**: Provides inertial, customizable smooth scrolling for all Windows applications.
 - **Graphical User Interface**: Modern, intuitive GUI built with CustomTkinter.
-- **Per-Application Settings**: Configure scrolling behavior for specific applications or use global settings.
+- **Application Exceptions**: Exclude selected applications from smooth scrolling; all other applications use the global parameters.
 - **System Tray Integration**: Minimize to tray, start automatically with Windows.
-- **Multi-Language Support**: English and Russian languages.
+- **Multi-Language Support**: English, Russian, and Chinese.
 - **Theme Support**: Light, Dark, and System appearance modes.
 - **Autostart**: Option to launch automatically on Windows startup.
 - **Configurable Parameters**:
@@ -32,12 +32,7 @@ A modern, user-friendly GUI application for smooth scrolling on Windows. This is
 pip install -r requirements.txt
 ```
 
-Required packages:
-- customtkinter
-- pystray
-- pywin32
-- easing-functions
-- Pillow
+`requirements.txt` installs the runtime and GUI dependencies.
 
 ### Building Executable
 To create a standalone .exe file:
@@ -75,15 +70,16 @@ Configure default scrolling behavior:
 - Horizontal Scroll Key: Modifier key for horizontal scrolling
 
 #### Applications Tab
-Manage per-application exceptions:
-- Add applications by path or regex pattern
-- Enable/disable scrolling for specific apps
-- Edit existing application rules
+Manage the exception list:
+- Add an application from the currently visible application picker. Adding it creates an active exception and disables smooth scrolling for that application.
+- Turn an exception off to restore global smooth scrolling for that application.
+- Delete an exception to restore the global behavior and remove the entry.
+- Rebind an entry to another application from its row.
 
 #### App Settings Tab
 - Appearance Mode: System/Light/Dark theme
-- Language: English/Russian
-- Autostart: Enable/disable launch on Windows startup
+- Language: English/Russian/Chinese. Changing language requires an application restart.
+- Autostart: Launch the application minimized to the tray and start the scrolling service with Windows.
 
 #### About Tab
 Information about the application, links to source code.

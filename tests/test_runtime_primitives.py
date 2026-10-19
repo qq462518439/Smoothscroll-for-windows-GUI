@@ -1,6 +1,7 @@
 import unittest
+import os
 from queue import Queue
-from threading import Lock
+from threading import Event, Lock
 from types import SimpleNamespace
 
 from smoothscroll.smoothscroll import SmoothScroll
@@ -18,6 +19,20 @@ class TimerTests(unittest.TestCase):
         timer.clear()
         timer.wait_tasks()
 
+    def test_shutdown_rejects_new_frames_and_has_a_bounded_join(self):
+        timer = Timer()
+        callback_started = Event()
+        release_callback = Event()
+        timer.start()
+        timer.set_timeout(lambda: (callback_started.set(), release_callback.wait()), 0)
+        self.assertTrue(callback_started.wait(1))
+
+        with self.assertRaises(TimeoutError):
+            timer.join(timeout=0.01)
+        self.assertFalse(timer.set_timeout(lambda: None, 0))
+        release_callback.set()
+        timer.join(timeout=1)
+        self.assertFalse(timer.is_alive())
 
 class ScrollQueueTests(unittest.TestCase):
     def make_scheduler(self, events):
@@ -106,6 +121,44 @@ class ScrollQueueTests(unittest.TestCase):
 
 
 class HookFailureTests(unittest.TestCase):
+    def test_hook_install_failure_is_reported_before_ready(self):
+        from unittest.mock import patch
+
+        listener = winapi.MouseListener.__new__(winapi.MouseListener)
+        listener._ready_event = Event()
+        listener._stop_event = Event()
+        listener.startup_error = None
+        listener.runtime_error = None
+        listener._hook = None
+        with patch.object(winapi, "LowLevelMouseProc", side_effect=lambda callback: callback), \
+             patch.object(winapi.user32, "SetWindowsHookExA", return_value=0), \
+             patch.object(winapi, "get_last_error", return_value=5):
+            listener.run()
+
+        self.assertTrue(listener._ready_event.is_set())
+        self.assertTrue(listener._stop_event.is_set())
+        self.assertIsInstance(listener.startup_error, OSError)
+
+    def test_hook_is_uninstalled_when_message_loop_exits(self):
+        from unittest.mock import patch
+
+        listener = winapi.MouseListener.__new__(winapi.MouseListener)
+        listener._ready_event = Event()
+        listener._stop_event = Event()
+        listener.startup_error = None
+        listener.runtime_error = None
+        listener._hook = None
+        with patch.object(winapi, "LowLevelMouseProc", side_effect=lambda callback: callback), \
+             patch.object(winapi.user32, "SetWindowsHookExA", return_value=123), \
+             patch.object(winapi.user32, "PeekMessageW"), \
+             patch.object(winapi.user32, "GetMessageW", return_value=0), \
+             patch.object(winapi.user32, "UnhookWindowsHookEx", return_value=1) as unhook:
+            listener.run()
+
+        unhook.assert_called_once_with(123)
+        self.assertTrue(listener._stop_event.is_set())
+        self.assertIsNone(listener.runtime_error)
+
     def test_negative_hook_code_passes_through_without_lookup(self):
         from unittest.mock import patch
 
@@ -151,6 +204,82 @@ class HookFailureTests(unittest.TestCase):
 
 
 class GuiCallbackTests(unittest.TestCase):
+    def test_existing_instance_mutex_is_rejected_and_closed(self):
+        from unittest.mock import patch
+        from gui import _acquire_instance_mutex
+
+        with patch("gui.win32event.CreateMutex", return_value=123), \
+             patch("gui.win32api.GetLastError", return_value=183), \
+             patch("gui.win32api.CloseHandle") as close_handle:
+            self.assertIsNone(_acquire_instance_mutex())
+
+        close_handle.assert_called_once_with(123)
+
+    def test_tray_actions_are_dispatched_on_the_ui_poll(self):
+        from types import SimpleNamespace
+        from gui import SmoothScrollGUI
+
+        calls = []
+        app = SmoothScrollGUI.__new__(SmoothScrollGUI)
+        app._tray_actions = Queue()
+        app._closing = True
+        app.smooth_scroll = None
+        app._queue_tray_action(lambda: calls.append("ran"))
+        app.root = SimpleNamespace(after=lambda *_args: self.fail("closed UI must not reschedule"))
+        SmoothScrollGUI._process_tray_actions(app)
+
+        self.assertEqual(calls, ["ran"])
+
+    def test_script_autostart_command_targets_gui_entrypoint(self):
+        from unittest.mock import patch
+        from gui import SmoothScrollGUI
+
+        with patch("gui.sys.frozen", False, create=True), \
+             patch("gui.sys.executable", r"C:\Python\python.exe"), \
+             patch("gui.os.path.abspath", side_effect=lambda path: path):
+            command = SmoothScrollGUI.application_command(tray=True)
+
+        self.assertEqual(command[0], r"C:\Python\python.exe")
+        self.assertTrue(command[1].endswith("main.py"))
+        self.assertEqual(command[2], "--tray")
+
+    def test_malformed_config_leaves_default_gui_settings(self):
+        from unittest.mock import mock_open, patch
+        from gui import SmoothScrollGUI, Lang
+
+        app = SmoothScrollGUI.__new__(SmoothScrollGUI)
+        app.lang = Lang("en")
+        app.get_default_config = lambda: "defaults"
+        with patch("gui.get_app_directory", return_value="C:/app"), \
+             patch("gui.os.path.exists", return_value=True), \
+             patch("builtins.open", mock_open(read_data="not json")), \
+             patch("gui.messagebox.showerror"):
+            app.load_config()
+
+        self.assertEqual(app.gui_settings, {})
+        self.assertEqual(app.config, "defaults")
+
+    def test_config_save_swaps_runtime_config_without_restarting_service(self):
+        import json
+        from unittest.mock import Mock, patch
+        from tempfile import TemporaryDirectory
+        from gui import SmoothScrollGUI
+
+        with TemporaryDirectory() as directory:
+            app = SmoothScrollGUI.__new__(SmoothScrollGUI)
+            app.save_timer = None
+            app.config = object()
+            app.lang = SimpleNamespace(get=lambda key: key)
+            app.update_global_config = Mock()
+            app.serialize_config = lambda: {"apps": []}
+            app.smooth_scroll = SimpleNamespace(update_config=Mock())
+            with patch("gui.get_app_directory", return_value=directory):
+                self.assertTrue(app._write_config())
+
+            with open(os.path.join(directory, "config.json"), encoding="utf-8") as saved:
+                self.assertEqual(json.load(saved), {"apps": []})
+            app.smooth_scroll.update_config.assert_called_once_with(app.config)
+
     def test_hover_boundary_includes_descendants_and_excludes_neighbors(self):
         from types import SimpleNamespace
         from gui import _is_widget_within

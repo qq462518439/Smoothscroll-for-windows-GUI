@@ -9,9 +9,12 @@ import threading
 import winreg
 import os
 import sys
+import subprocess
 import webbrowser
 import tempfile
-import psutil
+from queue import Empty, Queue
+import win32api
+import win32event
 
 
 def get_app_directory():
@@ -39,6 +42,22 @@ def _is_widget_within(widget, ancestor):
     while widget is not None and widget is not ancestor:
         widget = getattr(widget, "master", None)
     return widget is ancestor
+
+
+def _acquire_instance_mutex():
+    mutex = win32event.CreateMutex(None, True, r"Local\SmoothScrollForWindowsGUI")
+    if win32api.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        win32api.CloseHandle(mutex)
+        return None
+    return mutex
+
+
+def _release_instance_mutex(mutex):
+    if mutex:
+        try:
+            win32event.ReleaseMutex(mutex)
+        finally:
+            win32api.CloseHandle(mutex)
 
 from smoothscroll import SmoothScroll, SmoothScrollConfig, AppConfig, ScrollConfig
 from win32con import VK_SHIFT, VK_CONTROL, VK_MENU
@@ -246,30 +265,12 @@ class Lang:
 
 class SmoothScrollGUI:
     def __init__(self, root, auto_start=False, start_minimized=False):
+        self.lang = Lang('en')
         # Check for single instance
-        self.lock_file = os.path.join(tempfile.gettempdir(), "smoothscroll.lock")
-        if os.path.exists(self.lock_file):
-            try:
-                with open(self.lock_file, 'r') as f:
-                    pid = int(f.read().strip())
-                
-                # Try to check if process is still running using psutil
-                if psutil.pid_exists(pid):
-                    messagebox.showerror("Error", self.lang.get('error_already_running'))
-                    sys.exit(1)
-                else:
-                    # Stale lock file, remove it
-                    os.remove(self.lock_file)
-            except (ValueError, OSError):
-                # Invalid PID or file read error, remove lock file
-                try:
-                    os.remove(self.lock_file)
-                except OSError:
-                    pass
-
-        # Create new lock file
-        with open(self.lock_file, 'w') as f:
-            f.write(str(os.getpid()))
+        self.instance_mutex = _acquire_instance_mutex()
+        if not self.instance_mutex:
+            messagebox.showerror(self.lang.get('error'), self.lang.get('error_already_running'))
+            sys.exit(1)
 
         self.root = root
         self.root.title("SmoothScroll for Windows GUI")
@@ -287,6 +288,9 @@ class SmoothScrollGUI:
         self.lang = Lang('en')  # Default language
         self.save_timer = None
         self._app_picker_window = None
+        self._tray_actions = Queue()
+        self._tray_poll_id = None
+        self._closing = False
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.load_config()  # Load config first to set language
@@ -294,6 +298,7 @@ class SmoothScrollGUI:
         self.create_widgets()
         self.populate_apps_list()  # Populate after widgets are created
         self.update_gui_from_config()  # Update GUI after widgets are created
+        self._tray_poll_id = self.root.after(50, self._process_tray_actions)
 
         if self.auto_start:
             self.start_smooth_scroll()
@@ -630,8 +635,21 @@ class SmoothScrollGUI:
         self.lang.lang = lang
         self.auto_save_config()
         if messagebox.askyesno(self.lang.get('info'), self.lang.get('restart_for_lang') + '\n\n是否立即重启？'):
-            self.quit_app()
-            os.startfile(sys.executable)
+            if self.save_timer:
+                self.root.after_cancel(self.save_timer)
+                self.save_timer = None
+            if not self._write_config():
+                return
+            if self.quit_app():
+                subprocess.Popen(self.application_command())
+
+    @staticmethod
+    def application_command(tray=False):
+        args = ["--tray"] if tray else []
+        if getattr(sys, 'frozen', False):
+            return [os.path.abspath(sys.executable), *args]
+        entrypoint = os.path.join(get_app_directory(), "main.py")
+        return [sys.executable, entrypoint, *args]
 
     def change_color_theme(self, theme):
         if theme == "red":
@@ -641,6 +659,7 @@ class SmoothScrollGUI:
         messagebox.showinfo(self.lang.get('info'), self.lang.get('appearance_applied'))
 
     def load_config(self):
+        self.gui_settings = {}
         config_path = os.path.join(get_app_directory(), "config.json")
         if os.path.exists(config_path):
             try:
@@ -653,6 +672,7 @@ class SmoothScrollGUI:
                 self.gui_settings = gui_settings
             except Exception as e:
                 messagebox.showerror(self.lang.get('load_config_error'), str(e))
+                self.config = self.get_default_config()
         else:
             # Use default config
             self.gui_settings = {}
@@ -688,14 +708,28 @@ class SmoothScrollGUI:
             self.update_global_config()
             config_path = os.path.join(get_app_directory(), "config.json")
             data = self.serialize_config()
-            with open(config_path, 'w') as f:
-                json.dump(data, f, indent=4)
-            # 运行中自动热重载参数
+            temp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode='w', encoding='utf-8', dir=os.path.dirname(config_path),
+                    prefix='.config-', suffix='.tmp', delete=False
+                ) as config_file:
+                    temp_path = config_file.name
+                    json.dump(data, config_file, indent=4)
+                    config_file.flush()
+                    os.fsync(config_file.fileno())
+                os.replace(temp_path, config_path)
+                temp_path = None
+            finally:
+                if temp_path and os.path.exists(temp_path):
+                    os.remove(temp_path)
+            # Swap the config snapshot without restarting the global hook.
             if self.smooth_scroll:
-                self.stop_smooth_scroll()
-                self.start_smooth_scroll()
+                self.smooth_scroll.update_config(self.config)
+            return True
         except Exception as e:
             messagebox.showerror(self.lang.get('error'), str(e))
+            return False
         finally:
             self.save_timer = None
 
@@ -830,19 +864,31 @@ class SmoothScrollGUI:
 
     def start_smooth_scroll(self):
         if self.smooth_scroll:
-            return
+            return True
         self.update_global_config()
-        self.smooth_scroll = SmoothScroll(self.config)
-        self.smooth_scroll.start(is_block=False)
+        runtime = SmoothScroll(self.config)
+        try:
+            runtime.start(is_block=False)
+        except Exception as e:
+            self.smooth_scroll = None
+            messagebox.showerror(self.lang.get('error'), str(e))
+            return False
+        self.smooth_scroll = runtime
         # 更新按钮状态：运行中
         self.toggle_btn.configure(text=self.lang.get('stop'), fg_color="#C62828", hover_color="#8E0000")
+        return True
 
     def stop_smooth_scroll(self):
         if self.smooth_scroll:
-            self.smooth_scroll.join()
+            try:
+                self.smooth_scroll.join()
+            except Exception as e:
+                messagebox.showerror(self.lang.get('error'), str(e))
+                return False
             self.smooth_scroll = None
         # 更新按钮状态：已停止
         self.toggle_btn.configure(text=self.lang.get('start'), fg_color="#2E7D32", hover_color="#1B5E20")
+        return True
 
     def create_tray_icon(self):
         # Load icon from file, or create default if not found
@@ -856,13 +902,44 @@ class SmoothScrollGUI:
 
         # Create menu
         menu = pystray.Menu(
-            pystray.MenuItem(self.lang.get('tray_open'), self.show_window),
-            pystray.MenuItem(lambda item: self.lang.get('stop') if self.smooth_scroll else self.lang.get('start'), self.toggle_smooth_scroll),
-            pystray.MenuItem(self.lang.get('tray_quit'), self.quit_app)
+            pystray.MenuItem(self.lang.get('tray_open'), lambda _icon, _item: self._queue_tray_action(self.show_window)),
+            pystray.MenuItem(lambda _item: self.lang.get('stop') if self.smooth_scroll else self.lang.get('start'), lambda _icon, _item: self._queue_tray_action(self.toggle_smooth_scroll)),
+            pystray.MenuItem(self.lang.get('tray_quit'), lambda _icon, _item: self._queue_tray_action(self.quit_app))
         )
 
         self.tray_icon = pystray.Icon("SmoothScroll", image, "SmoothScroll", menu)
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
+
+    def _queue_tray_action(self, action):
+        self._tray_actions.put(action)
+
+    def _process_tray_actions(self):
+        while True:
+            try:
+                action = self._tray_actions.get_nowait()
+            except Empty:
+                break
+            try:
+                action()
+            except Exception as e:
+                messagebox.showerror(self.lang.get('error'), str(e))
+        runtime = self.smooth_scroll
+        if runtime and not runtime.is_running():
+            error = runtime.get_runtime_error()
+            try:
+                runtime.join()
+            except Exception as e:
+                error = error or e
+            self.smooth_scroll = None
+            self.toggle_btn.configure(
+                text=self.lang.get('start'),
+                fg_color="#2E7D32",
+                hover_color="#1B5E20",
+            )
+            if error:
+                messagebox.showerror(self.lang.get('error'), str(error))
+        if not self._closing:
+            self._tray_poll_id = self.root.after(50, self._process_tray_actions)
 
     def on_close(self):
         self.root.withdraw()  # Hide window instead of closing
@@ -873,11 +950,20 @@ class SmoothScrollGUI:
 
     def quit_app(self):
         if self.smooth_scroll:
-            self.smooth_scroll.join()
+            try:
+                self.smooth_scroll.join()
+            except Exception as e:
+                messagebox.showerror(self.lang.get('error'), str(e))
+                return False
+        self._closing = True
+        if self._tray_poll_id:
+            self.root.after_cancel(self._tray_poll_id)
+            self._tray_poll_id = None
         self.tray_icon.stop()
-        if os.path.exists(self.lock_file):
-            os.remove(self.lock_file)
+        _release_instance_mutex(self.instance_mutex)
+        self.instance_mutex = None
         self.root.quit()
+        return True
 
     def is_autostart_enabled(self):
         try:
@@ -896,16 +982,13 @@ class SmoothScrollGUI:
 
     def enable_autostart(self):
         try:
-            if getattr(sys, 'frozen', False):
-                # Running as PyInstaller executable
-                exe_path = os.path.abspath(sys.executable)
-            else:
-                # Running as Python script - need full path to pythonw.exe
+            command = self.application_command(tray=True)
+            if not getattr(sys, 'frozen', False):
                 python_exe = os.path.join(os.path.dirname(sys.executable), 'pythonw.exe')
                 if not os.path.exists(python_exe):
                     python_exe = sys.executable
-                script_path = os.path.join(get_app_directory(), os.path.basename(__file__))
-                exe_path = f'"{python_exe}" "{script_path}" --tray'
+                command[0] = python_exe
+            exe_path = subprocess.list2cmdline(command)
             
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)
             winreg.SetValueEx(key, "SmoothScroll", 0, winreg.REG_SZ, exe_path)
@@ -948,6 +1031,10 @@ class SmoothScrollGUI:
         ctk.CTkLabel(frame, text=self.lang.get('about_version')).pack(anchor="w", pady=(5,0))
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--tray", action="store_true")
+    args = parser.parse_args()
     root = ctk.CTk()
-    app = SmoothScrollGUI(root)
+    app = SmoothScrollGUI(root, auto_start=args.tray, start_minimized=args.tray)
     root.mainloop()

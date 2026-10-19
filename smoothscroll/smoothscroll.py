@@ -29,7 +29,21 @@ class SmoothScroll:
 
     def start(self, is_block: bool = True):
         self._timer.start()
-        self._listener.start()
+        try:
+            self._listener.start()
+            if not self._listener.wait_until_ready(5):
+                raise TimeoutError("Mouse hook startup timed out")
+            if self._listener.startup_error:
+                raise RuntimeError("Mouse hook failed to start") from self._listener.startup_error
+        except Exception:
+            if self._listener.ident is not None and self._listener.is_alive():
+                try:
+                    self._listener.quit()
+                    self._listener.join(timeout=5)
+                except OSError:
+                    pass
+            self._timer.join(timeout=5)
+            raise
         set_console_ctrl_handler(lambda _: self.join())
         if is_block:
             self._listener.listen()
@@ -137,6 +151,12 @@ class SmoothScroll:
 
     def get_config(self) -> SmoothScrollConfig:
         return self._listener.config
+
+    def is_running(self) -> bool:
+        return self._listener.is_alive()
+
+    def get_runtime_error(self):
+        return self._listener.runtime_error
 
     def update_config(self, config: SmoothScrollConfig) -> None:
         self._listener.config = config

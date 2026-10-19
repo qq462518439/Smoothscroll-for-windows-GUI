@@ -1,4 +1,5 @@
 import unittest
+import re
 
 from smoothscroll.models import AppConfig
 from smoothscroll.utils.winapi import resolve_scroll_config
@@ -12,6 +13,23 @@ class RuleResolutionTests(unittest.TestCase):
     def test_enabled_global_is_used_without_custom_match(self):
         rules = [AppConfig(regexp=r'.*', enabled=True, scroll_config=self.global_config)]
         self.assertIs(resolve_scroll_config(rules, r'C:/Apps/example.exe'), self.global_config)
+
+    def test_windows_path_matching_is_case_insensitive(self):
+        rules = [
+            AppConfig(regexp=r'.*', enabled=True, scroll_config=self.global_config),
+            AppConfig(path=r"C:\Apps\Example.exe", scroll_config=self.special_config),
+        ]
+        self.assertIs(
+            resolve_scroll_config(rules, r"c:/apps/example.EXE"),
+            None,
+        )
+
+    def test_compiled_rule_patterns_keep_their_flags(self):
+        pattern = re.compile(r"example\.exe", re.MULTILINE)
+        rule = AppConfig(regexp=pattern)
+
+        self.assertTrue(rule.regexp.flags & re.MULTILINE)
+        self.assertTrue(rule.regexp.flags & re.IGNORECASE)
 
     def test_disabled_global_disables_scroll(self):
         rules = [AppConfig(regexp=r'.*', enabled=False, scroll_config=self.global_config)]

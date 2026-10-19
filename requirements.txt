@@ -1,3 +1,6 @@
 easing-functions==1.0.4
 pywin32==305
 psutil==5.9.8
+customtkinter
+pystray
+Pillow

@@ -1,4 +1,4 @@
-from ctypes import WinDLL, c_int
+from ctypes import WinDLL, byref, c_int, get_last_error
 from ctypes.wintypes import MSG
 from threading import Thread, Event
 from typing import Callable
@@ -17,6 +17,7 @@ def resolve_scroll_config(app_configs, current_app_path):
     """Resolve the effective rule without applying any Windows side effects."""
     if not current_app_path:
         return None
+    current_app_path = current_app_path.replace('\\', '/').casefold()
     app_configs = tuple(app_configs)
     global_config = next(
         (app_config for app_config in reversed(app_configs)
@@ -28,7 +29,7 @@ def resolve_scroll_config(app_configs, current_app_path):
 
     for app_config in app_configs:
         is_global = bool(app_config.regexp and app_config.regexp.pattern == '.*')
-        match = current_app_path == app_config.path or bool(
+        match = current_app_path == app_config.path.casefold() or bool(
             app_config.regexp and app_config.regexp.search(current_app_path)
         )
         if not match:
@@ -58,26 +59,49 @@ class MouseListener(Thread):
         self.config = config
 
         self._stop_event = Event()
+        self._ready_event = Event()
+        self.startup_error = None
+        self.runtime_error = None
+        self._hook = None
 
     def run(self):
-        mouse_callback = LowLevelMouseProc(self._low_level_mouse_handler)
-        mouse_hook = user32.SetWindowsHookExA(
-            WH_MOUSE_LL,
-            mouse_callback,
-            c_int(0),
-            c_int(0)
-        )
+        try:
+            mouse_callback = LowLevelMouseProc(self._low_level_mouse_handler)
+            self._hook = user32.SetWindowsHookExA(
+                WH_MOUSE_LL,
+                mouse_callback,
+                c_int(0),
+                c_int(0)
+            )
+            if not self._hook:
+                error = get_last_error()
+                raise OSError(error, "SetWindowsHookExA failed")
 
-        msg = MSG()
-        while bRet := user32.GetMessageW(msg, c_int(0), c_int(0), c_int(0)):
-            if bRet == -1:
-                break
-            user32.TranslateMessage(msg)
-            user32.DispatchMessageA(msg)
-
-        user32.UnhookWindowsHookEx(mouse_hook)
-
-        self._stop_event.set()
+            msg = MSG()
+            # Create this thread's message queue before reporting startup ready.
+            user32.PeekMessageW(byref(msg), None, 0, 0, 0)
+            self._ready_event.set()
+            while bRet := user32.GetMessageW(msg, c_int(0), c_int(0), c_int(0)):
+                if bRet == -1:
+                    error = get_last_error()
+                    raise OSError(error, "GetMessageW failed")
+                user32.TranslateMessage(msg)
+                user32.DispatchMessageA(msg)
+        except Exception as exc:
+            if not self._ready_event.is_set():
+                self.startup_error = exc
+            else:
+                self.runtime_error = exc
+        finally:
+            self._ready_event.set()
+            if self._hook:
+                try:
+                    if not user32.UnhookWindowsHookEx(self._hook):
+                        self.runtime_error = OSError(get_last_error(), "UnhookWindowsHookEx failed")
+                except Exception as exc:
+                    self.runtime_error = exc
+                self._hook = None
+            self._stop_event.set()
 
     def _low_level_mouse_handler(self, n_code, w_param, l_param):
         if n_code < 0:
@@ -102,12 +126,23 @@ class MouseListener(Thread):
     def listen(self) -> None:
         self._stop_event.wait()
 
+    def wait_until_ready(self, timeout: float) -> bool:
+        return self._ready_event.wait(timeout)
+
     def quit(self) -> None:
-        user32.PostThreadMessageW(self.native_id, WM_QUIT, c_int(0), c_int(0))
+        if self.ident is None or not self.is_alive():
+            return
+        if not user32.PostThreadMessageW(self.native_id, WM_QUIT, c_int(0), c_int(0)):
+            error = get_last_error()
+            raise OSError(error, "PostThreadMessageW(WM_QUIT) failed")
 
     def join(self, timeout=None):
+        if self.ident is None:
+            return
         self.quit()
-        super().join(timeout=timeout)
+        super().join(timeout=5 if timeout is None else timeout)
+        if self.is_alive():
+            raise TimeoutError("Mouse hook thread did not stop")
 
 
 def scroll(delta: int, is_horizontal: bool = False) -> None:

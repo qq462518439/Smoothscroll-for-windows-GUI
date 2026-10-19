@@ -42,8 +42,11 @@ class AppConfig:
             scroll_config: Optional[ScrollConfig] = None,
             exception_active: Optional[bool] = None,
     ):
-        self.path = (path or '').replace('\\', r'/')
-        self.regexp = re.compile(regexp or r'<>')
+        self.path = (path or '').replace('\\', r'/').casefold()
+        if isinstance(regexp, re.Pattern):
+            self.regexp = re.compile(regexp.pattern, regexp.flags | re.IGNORECASE)
+        else:
+            self.regexp = re.compile(regexp or r'<>', re.IGNORECASE)
         self.enabled = bool(enabled)
         # `enabled` remains the legacy config field; custom rules use the
         # explicit exception state from the current schema.
