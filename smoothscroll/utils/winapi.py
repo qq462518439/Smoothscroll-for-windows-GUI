@@ -13,6 +13,32 @@ from ..models import SmoothScrollConfig, LowLevelMouseProc
 user32 = WinDLL('user32', use_last_error=True)
 
 
+def resolve_scroll_config(app_configs, current_app_path):
+    """Resolve the effective rule without applying any Windows side effects."""
+    global_config = None
+    special_config = None
+    has_special_rule = False
+
+    for app_config in app_configs:
+        is_global = bool(app_config.regexp and app_config.regexp.pattern == '.*')
+        match = current_app_path == app_config.path or bool(
+            app_config.regexp and app_config.regexp.search(current_app_path)
+        )
+        if not match:
+            continue
+        if is_global:
+            global_config = app_config
+            continue
+
+        has_special_rule = True
+        # A matching disabled custom rule is an explicit opt-out.
+        special_config = app_config.scroll_config if app_config.enabled else None
+
+    if has_special_rule:
+        return special_config
+    return global_config.scroll_config if global_config and global_config.enabled else None
+
+
 class MouseListener(Thread):
     def __init__(self, callback: Callable, config: SmoothScrollConfig, *args: object, **kwargs: object):
         super().__init__(*args, **kwargs)
@@ -46,9 +72,7 @@ class MouseListener(Thread):
             if not l_param.contents.reserved:
                 scroll_config = None
                 current_app_path = get_current_app_path()
-                for app_config in self.config.app_configs:
-                    if current_app_path == app_config.path or app_config.regexp.match(current_app_path):
-                        scroll_config = app_config.scroll_config
+                scroll_config = resolve_scroll_config(self.config.app_configs, current_app_path)
                 if scroll_config:
                     self._callback(
                         l_param.contents.data / (2 << 15) * (-1 if scroll_config.inverted else 1),

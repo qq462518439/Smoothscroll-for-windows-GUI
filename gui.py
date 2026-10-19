@@ -662,7 +662,12 @@ class SmoothScrollGUI:
 
     def deserialize_config(self, data):
         apps = []
-        for app_data in data.get("apps", []):
+        raw_apps = data.get("apps", [])
+        if not isinstance(raw_apps, list):
+            raise ValueError("配置中的 apps 必须是数组")
+        for app_data in raw_apps:
+            if not isinstance(app_data, dict):
+                raise ValueError("配置中的规则必须是对象")
             scroll_config = None
             if "scroll_config" in app_data:
                 sc = app_data["scroll_config"]
@@ -687,6 +692,24 @@ class SmoothScrollGUI:
                 scroll_config=scroll_config
             )
             apps.append(app)
+
+        # The global rule is an internal fallback and must always exist. Keep
+        # its enabled flag when the user explicitly disabled it, while filling
+        # missing parameters from the built-in defaults.
+        default_global = self.get_default_config().app_configs[0]
+        global_index = next(
+            (i for i, app in enumerate(apps)
+             if app.regexp and app.regexp.pattern == '.*'),
+            None
+        )
+        if global_index is None:
+            apps.insert(0, default_global)
+        else:
+            global_config = apps[global_index]
+            if global_config.scroll_config is None:
+                global_config.scroll_config = default_global.scroll_config
+            if global_index != 0:
+                apps.insert(0, apps.pop(global_index))
 
         # Apply GUI settings
         gui_settings = data.get("gui_settings", {})

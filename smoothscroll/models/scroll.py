@@ -43,8 +43,11 @@ class AppConfig:
     ):
         self.path = (path or '').replace('\\', r'/')
         self.regexp = re.compile(regexp or r'<>')
-        self.enabled = enabled
-        self.scroll_config = scroll_config if enabled else None
+        self.enabled = bool(enabled)
+        # Keep the parameters even when a rule is disabled.  The enabled flag
+        # controls matching; retaining the config lets the GUI edit and save a
+        # disabled global rule without losing its settings.
+        self.scroll_config = scroll_config
 
 
 class SmoothScrollConfig:
