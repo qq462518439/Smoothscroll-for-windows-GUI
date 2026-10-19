@@ -376,9 +376,39 @@ class GuiCallbackTests(unittest.TestCase):
         app.appearance_var = SimpleNamespace(get=lambda: "System")
         app.start_minimized_var = SimpleNamespace(get=lambda: False)
         app.lang = Lang("en")
+        app.gui_settings = {}
+        app.root = SimpleNamespace(state=lambda: "normal", geometry=lambda: "500x700+120+80")
         saved = app.serialize_config()
         self.assertFalse(saved["apps"][1]["exception_active"])
         self.assertNotIn("enabled", saved["apps"][1])
+        self.assertEqual(saved["gui_settings"]["window_geometry"], "500x700+120+80")
+
+    def test_saved_window_geometry_is_restored_and_configure_is_debounced(self):
+        from types import SimpleNamespace
+        from gui import SmoothScrollGUI
+
+        applied = []
+        app = SmoothScrollGUI.__new__(SmoothScrollGUI)
+        app.gui_settings = {"window_geometry": "640x720+120+80"}
+        app.root = SimpleNamespace(
+            geometry=lambda value=None: applied.append(value) if value else "640x720+120+80",
+            state=lambda: "normal",
+        )
+        app.appearance_var = SimpleNamespace(set=lambda _value: None)
+        app.language_var = SimpleNamespace(set=lambda _value: None)
+        app.start_minimized_var = SimpleNamespace(set=lambda _value: None)
+        app.lang = SimpleNamespace(lang="en")
+        app.config = SimpleNamespace(app_configs=[])
+        app.start_minimized = False
+        app.auto_save_config = lambda: applied.append("save")
+
+        SmoothScrollGUI.update_gui_from_config(app)
+        SmoothScrollGUI._handle_window_configure(
+            app, SimpleNamespace(widget=app.root)
+        )
+
+        self.assertEqual(applied, ["640x720+120+80", "save"])
+        self.assertEqual(app.gui_settings["window_geometry"], "640x720+120+80")
 
 
 if __name__ == "__main__":

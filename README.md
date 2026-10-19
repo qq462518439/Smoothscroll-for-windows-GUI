@@ -89,7 +89,7 @@ Manage the exception list:
 Information about the application, links to source code.
 
 ### Configuration
-Settings are automatically saved to `config.json` in the application directory.
+Settings and the main window position are automatically saved to `config.json` in the application directory.
 
 
 ## 🌍 Localization

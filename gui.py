@@ -299,6 +299,7 @@ class SmoothScrollGUI:
         self.create_widgets()
         self.populate_apps_list()  # Populate after widgets are created
         self.update_gui_from_config()  # Update GUI after widgets are created
+        self.root.bind("<Configure>", self._handle_window_configure, add="+")
         self._tray_poll_id = self.root.after(50, self._process_tray_actions)
 
         if self.auto_start:
@@ -704,6 +705,16 @@ class SmoothScrollGUI:
             self.root.after_cancel(self.save_timer)
         self.save_timer = self.root.after(500, self._write_config)
 
+    def _handle_window_configure(self, event):
+        if event.widget is self.root and self.root.state() == "normal":
+            self.gui_settings["window_geometry"] = self.root.geometry()
+            self.auto_save_config()
+
+    def _current_window_geometry(self):
+        if self.root.state() == "normal":
+            return self.root.geometry()
+        return self.gui_settings.get("window_geometry")
+
     def _write_config(self):
         try:
             self.update_global_config()
@@ -740,7 +751,8 @@ class SmoothScrollGUI:
             "gui_settings": {
                 "appearance_mode": self.appearance_var.get(),
                 "language": self.lang.lang,
-                "start_minimized": self.start_minimized_var.get()
+                "start_minimized": self.start_minimized_var.get(),
+                "window_geometry": self._current_window_geometry()
             }
         }
         for app in self.config.app_configs:
@@ -850,6 +862,13 @@ class SmoothScrollGUI:
         self.appearance_var.set(self.gui_settings.get("appearance_mode", "System"))
         self.language_var.set(self.lang.lang)
         self.start_minimized_var.set(self.gui_settings.get("start_minimized", False))
+
+        geometry = self.gui_settings.get("window_geometry")
+        if isinstance(geometry, str) and geometry:
+            try:
+                self.root.geometry(geometry)
+            except Exception:
+                pass
         
         # Apply start_minimized from config if not explicitly set via command line
         if self.gui_settings.get("start_minimized", False) and not self.start_minimized:
@@ -970,6 +989,10 @@ class SmoothScrollGUI:
             except Exception as e:
                 messagebox.showerror(self.lang.get('error'), str(e))
                 return False
+        if self.save_timer:
+            self.root.after_cancel(self.save_timer)
+            self.save_timer = None
+        self._write_config()
         self._closing = True
         if self._tray_poll_id:
             self.root.after_cancel(self._tray_poll_id)

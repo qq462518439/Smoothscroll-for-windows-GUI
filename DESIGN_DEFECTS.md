@@ -26,6 +26,8 @@ they can be tested without a live Windows desktop.
   case-insensitive, consistent with Windows paths.
 - The tray Open menu entry is the default activation action; minimizing the
   window withdraws it only after Tk reports the `iconic` state.
+- Main-window geometry is persisted with GUI settings and restored on startup;
+  geometry changes are debounced, and tray quit flushes pending settings.
 - Exception-list semantics remain: an active entry disables that app; an
   inactive entry restores global fallback; custom entries consume global
   parameters rather than owning separate scroll settings.
