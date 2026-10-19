@@ -1,4 +1,5 @@
 import math
+from threading import Lock
 from time import perf_counter
 from typing import Union, Callable
 
@@ -21,6 +22,7 @@ class SmoothScroll:
         self._refresh_rate = (1000 / self._display_frequency - 0.3) / 1000
         self._queue = []
         self._pending = False
+        self._queue_lock = Lock()
         self._previous_scroll_time = perf_counter()
         self._excess_delta_x = 0
         self._excess_delta_y = 0
@@ -41,52 +43,72 @@ class SmoothScroll:
                 delta *= min(factor, config.acceleration_max)
         self._previous_scroll_time = perf_counter()
 
-        self._queue.append(ScrollEvent(delta, is_horizontal, config))
-
-        if not self._pending:
-            self._request_scroll()
+        with self._queue_lock:
+            self._queue.append(ScrollEvent(delta, is_horizontal, config))
+            should_schedule = not self._pending
+            if should_schedule:
+                self._pending = True
+        if should_schedule:
+            self._schedule_frame(0)
 
     def _request_scroll(self):
-        def request_scroll():
-            delta_x, delta_y = 0, 0
+        with self._queue_lock:
+            if not self._pending and self._queue:
+                self._pending = True
+                should_schedule = True
+            else:
+                should_schedule = False
+        if should_schedule:
+            self._schedule_frame(0)
 
-            for scroll_event in self._queue:
-                elapsed = perf_counter() - scroll_event.start
-                finished = elapsed >= scroll_event.config.duration
-                progress = self._pulse(
-                    1 if finished else elapsed / scroll_event.config.duration,
-                    scroll_event.config.pulse_scale
-                )
+    def _schedule_frame(self, timeout):
+        self.__request_frame(self._process_scroll_frame, timeout)
 
-                delta = scroll_event.ease(progress) - scroll_event.previous_delta
-                if scroll_event.is_horizontal:
-                    delta_y += delta
-                else:
-                    delta_x += delta
-                scroll_event.previous_delta += delta
+    def _process_scroll_frame(self):
+        with self._queue_lock:
+            events = tuple(self._queue)
 
-                if finished:
-                    self._queue.remove(scroll_event)
-                    continue
+        delta_x, delta_y = 0, 0
+        finished_events = set()
+        for scroll_event in events:
+            elapsed = perf_counter() - scroll_event.start
+            finished = elapsed >= scroll_event.config.duration
+            progress = self._pulse(
+                1 if finished else elapsed / scroll_event.config.duration,
+                scroll_event.config.pulse_scale
+            )
+            delta = scroll_event.ease(progress) - scroll_event.previous_delta
+            if scroll_event.is_horizontal:
+                delta_y += delta
+            else:
+                delta_x += delta
+            scroll_event.previous_delta += delta
+            if finished:
+                finished_events.add(id(scroll_event))
 
-            excess_x, delta_x = math.modf(delta_x)
-            self._excess_delta_x, extra_x = math.modf(self._excess_delta_x + excess_x)
+        excess_x, delta_x = math.modf(delta_x)
+        self._excess_delta_x, extra_x = math.modf(self._excess_delta_x + excess_x)
+        excess_y, delta_y = math.modf(delta_y)
+        self._excess_delta_y, extra_y = math.modf(self._excess_delta_y + excess_y)
 
-            excess_y, delta_y = math.modf(delta_y)
-            self._excess_delta_y, extra_y = math.modf(self._excess_delta_y + excess_y)
+        if delta_x := int(delta_x + extra_x):
+            scroll(delta_x, False)
+        if delta_y := int(delta_y + extra_y):
+            scroll(delta_y, True)
 
-            if delta_x := int(delta_x + extra_x):
-                scroll(delta_x, False)
-            if delta_y := int(delta_y + extra_y):
-                scroll(delta_y, True)
+        with self._queue_lock:
+            if finished_events:
+                self._queue = [
+                    event for event in self._queue if id(event) not in finished_events
+                ]
+            has_pending_events = bool(self._queue)
+            if not has_pending_events:
+                self._excess_delta_x = 0
+                self._excess_delta_y = 0
+                self._pending = False
 
-            if self._queue:
-                return self.__request_frame(request_scroll, self._refresh_rate)
-            self._excess_delta = 0
-            self._pending = False
-
-        self.__request_frame(request_scroll, 0)
-        self._pending = True
+        if has_pending_events:
+            self._schedule_frame(self._refresh_rate)
 
     def __request_frame(self, callback: Callable, timeout: Union[int, float]) -> None:
         self._timer.set_timeout(callback, timeout)

@@ -40,10 +40,16 @@ class AppConfig:
             regexp: Optional[str] = None,
             enabled: Optional[bool] = True,
             scroll_config: Optional[ScrollConfig] = None,
+            exception_active: Optional[bool] = None,
     ):
         self.path = (path or '').replace('\\', r'/')
         self.regexp = re.compile(regexp or r'<>')
         self.enabled = bool(enabled)
+        # `enabled` remains the legacy config field; custom rules use the
+        # explicit exception state from the current schema.
+        self.exception_active = bool(
+            enabled if exception_active is None else exception_active
+        )
         # Keep the parameters even when a rule is disabled.  The enabled flag
         # controls matching; retaining the config lets the GUI edit and save a
         # disabled global rule without losing its settings.

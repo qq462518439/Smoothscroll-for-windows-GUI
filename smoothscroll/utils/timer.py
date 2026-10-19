@@ -1,7 +1,8 @@
-from queue import Queue
+from queue import Empty, Queue
 from threading import Thread
 from time import perf_counter, sleep
 from typing import Callable, Union
+import logging
 
 from ..models import TimerTask
 
@@ -16,9 +17,12 @@ class Timer(Thread):
             if (remained := task.start + task.timeout - perf_counter()) > 0:
                 sleep(remained)
 
-            task.callback()
-
-            self._queue.task_done()
+            try:
+                task.callback()
+            except Exception:
+                logging.exception("Timer callback failed")
+            finally:
+                self._queue.task_done()
 
     def set_timeout(self, callback: Callable, timeout: Union[int, float]):
         self._queue.put(TimerTask(callback, timeout))
@@ -27,8 +31,13 @@ class Timer(Thread):
         self.set_timeout(callback, timeout)
 
     def clear(self):
-        with self._queue.mutex:
-            self._queue.queue.clear()
+        while True:
+            try:
+                self._queue.get_nowait()
+            except Empty:
+                break
+            else:
+                self._queue.task_done()
 
     def wait_tasks(self):
         self._queue.join()

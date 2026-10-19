@@ -1,15 +1,19 @@
 # Design defect audit
 
-Audit date: 2026-10-19. This is an inventory of the current design and
-runtime defects. No behavior change is implied by this document.
+Audit date: 2026-10-19. This inventory records design and runtime defects
+found during review. Items marked `[Fixed]` have a corresponding regression
+test where practical.
 
 ## P0: directly affects whether scrolling works
 
-1. **The global enable state is hidden from the GUI.** The global rule is
+1. **The global enable state is hidden from the GUI, but adding another switch
+   is not an acceptable fix.** The global rule is
    removed from the application list, but the global settings page has no
    enable switch. A saved `enabled: false` therefore looks like a running
    application with no scrolling and cannot be corrected from the UI.
-   Evidence: `gui.py:346-400`, `gui.py:424-430`.
+    Evidence: `gui.py:346-400`, `gui.py:424-430`. The model needs one clear
+    ownership decision for this state instead of duplicating the run/stop
+    control in the settings page.
 
 2. **Hook installation and callback failures have no recovery path.** The
    code does not check `SetWindowsHookExA` or process/window lookup failures.
@@ -38,12 +42,11 @@ runtime defects. No behavior change is implied by this document.
 
 ## P1: rule and configuration model defects
 
-6. **An enabled custom rule can have no scroll configuration.** The GUI adds
-   rules with `enabled=True` and `scroll_config=None`. Such a rule matches and
-   suppresses the global fallback, so adding an application can disable
-   scrolling for that application instead of inheriting or storing a usable
-   configuration.
-   Evidence: `gui.py:520`, `smoothscroll/utils/winapi.py:33-39`.
+6. **[Fixed] Custom rules had ambiguous parameter ownership.** The
+   Applications panel is now an exception list: active entries disable that
+   application, inactive entries restore global fallback, and custom entries
+   do not own scroll parameters. Evidence before the fix: `gui.py:520`,
+   `smoothscroll/utils/winapi.py:33-39`.
 
 7. **Custom rule parameters are not editable.** The UI exposes only the global
    scroll parameters; the application rule editor was replaced by a program
@@ -143,12 +146,45 @@ runtime defects. No behavior change is implied by this document.
 
 ## Attack order
 
-1. Restore a visible, explicit global enable control and define its persisted
-   semantics.
+1. Decide the single owner of global enable state and remove the redundant
+   control path.
 2. Make hook start/stop and callback failure states observable and bounded.
 3. Remove restart-on-every-save; introduce a controlled runtime config update
    only after lifecycle safety is proven.
-4. Repair the scroll queue and timer ownership/concurrency.
-5. Define and validate the rule/config schema, including custom-rule config.
+4. [Done for findings 28-30] Repair the scroll queue and timer ownership/concurrency.
+5. Define and validate the exception rule/config schema.
 6. Repair autostart, restart, tray-thread, and single-instance behavior.
 7. Add Windows integration tests and update the README to match the product.
+
+## Second-pass findings
+
+22. **[Fixed] The active UI state used an inverted internal field.** Custom
+    entries now have a named `exception_active` state. Older `enabled` values
+    remain readable and new saves write the explicit field.
+
+23. **[Fixed] Exception toggle and program replacement used numeric index
+    closures.** Both now retain the rule object represented by the row.
+
+24. **[Fixed] Row hover transitions could flicker between child controls.**
+    Leave handling now defers the reset and checks whether the pointer remains
+    anywhere inside the row.
+
+25. **[Fixed] `_write_config()` performed work outside its exception boundary.**
+    Global value parsing and serialization now run inside the guarded save path.
+
+26. **[Fixed] The low-level hook did not honor negative hook codes.** It now
+    passes those messages to the next hook immediately.
+
+27. **[Fixed] Process lookup had no failure policy.** Lookup now returns an
+    unknown path for inaccessible processes, and the hook preserves native
+    scrolling instead of terminating the listener callback.
+
+28. **[Fixed] Timer queue cleanup was internally inconsistent.** `Timer.clear()`
+    now accounts for removed tasks, and callback errors cannot strand the
+    queue's unfinished-task count.
+
+29. **[Fixed] The scroll scheduler removed items from the list it was iterating.**
+    It now processes a snapshot and removes completed events under a lock.
+
+30. **[Fixed] Fractional scroll residue was never reset correctly.** Both axis
+    accumulators now reset atomically when the queue drains.

@@ -1,6 +1,6 @@
 import json
 import customtkinter as ctk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, TclError
 from typing import Optional
 import easing_functions
 import pystray
@@ -33,6 +33,12 @@ def resource_path(relative_path):
         base_path = get_app_directory()
 
     return os.path.join(base_path, relative_path)
+
+
+def _is_widget_within(widget, ancestor):
+    while widget is not None and widget is not ancestor:
+        widget = getattr(widget, "master", None)
+    return widget is ancestor
 
 from smoothscroll import SmoothScroll, SmoothScrollConfig, AppConfig, ScrollConfig
 from win32con import VK_SHIFT, VK_CONTROL, VK_MENU
@@ -72,6 +78,7 @@ class Lang:
                 'path': 'Path:',
                 'regexp': 'Regexp:',
                 'enabled': 'Enabled',
+                'scroll_enabled': 'Smooth scrolling',
                 'save_btn': 'Save',
                 'success': 'Success',
                 'error': 'Error',
@@ -134,6 +141,7 @@ class Lang:
                 'path': 'Путь:',
                 'regexp': 'Регулярное выражение:',
                 'enabled': 'Включено',
+                'scroll_enabled': 'Плавная прокрутка',
                 'save_btn': 'Сохранить',
                 'success': 'Успех',
                 'error': 'Ошибка',
@@ -196,6 +204,7 @@ class Lang:
                 'path': '程序路径：',
                 'regexp': '正则匹配规则：',
                 'enabled': '启用',
+                'scroll_enabled': '平滑滚动',
                 'save_btn': '保存',
                 'success': '操作成功',
                 'error': '错误',
@@ -277,6 +286,7 @@ class SmoothScrollGUI:
         self.start_minimized = start_minimized
         self.lang = Lang('en')  # Default language
         self.save_timer = None
+        self._app_picker_window = None
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.load_config()  # Load config first to set language
@@ -431,16 +441,33 @@ class SmoothScrollGUI:
             row = ctk.CTkFrame(self.apps_scrollable, fg_color="transparent", corner_radius=4)
             row.pack(fill="x", pady=3, padx=2)
             if not is_global:
-                ctk.CTkButton(row, text="删除", width=40, height=24, fg_color="transparent", command=lambda idx=i: self.del_app(idx)).pack(side="right", padx=4)
-            enable_var = ctk.BooleanVar(value=app.enabled)
-            def toggle(idx=i, var=enable_var):
-                self.config.app_configs[idx].enabled = var.get()
+                delete_button = ctk.CTkButton(
+                    row,
+                    text="删除",
+                    width=58,
+                    height=28,
+                    corner_radius=4,
+                    fg_color="#8B2E2E",
+                    hover_color="#B83A3A",
+                    text_color="#FFFFFF",
+                    command=lambda target=app: self.del_app(target),
+                )
+                delete_button.pack(side="right", padx=(4, 6), pady=2)
+            enable_var = ctk.BooleanVar(value=not app.exception_active)
+            def toggle(target=app, var=enable_var):
+                target.exception_active = not var.get()
                 self.auto_save_config()
                 # 立刻热重载，不用点总开关
                 if self.smooth_scroll:
                     self.stop_smooth_scroll()
                     self.start_smooth_scroll()
-            ctk.CTkSwitch(row, text="", width=32, variable=enable_var, command=toggle).pack(side="right", padx=6)
+            ctk.CTkSwitch(
+                row,
+                text=self.lang.get('scroll_enabled'),
+                width=32,
+                variable=enable_var,
+                command=toggle
+            ).pack(side="right", padx=6)
             if is_global:
                 ctk.CTkLabel(row, text="全局默认", anchor="w", font=ctk.CTkFont(size=14)).pack(side="left", padx=10, pady=8, fill="x", expand=True)
             else:
@@ -451,16 +478,33 @@ class SmoothScrollGUI:
                 def on_enter(e, r=row):
                     r.configure(fg_color="#3a3a3a")
                 def on_leave(e, r=row):
-                    r.configure(fg_color="transparent")
+                    def clear_if_outside():
+                        current = self.root.winfo_containing(
+                            self.root.winfo_pointerx(), self.root.winfo_pointery()
+                        )
+                        if not _is_widget_within(current, r):
+                            r.configure(fg_color="transparent")
+                    r.after_idle(clear_if_outside)
                 def bind_hover(w):
-                    w.bind("<Enter>", on_enter)
-                    w.bind("<Leave>", on_leave)
+                    # Append to existing widget bindings. Replacing them
+                    # breaks CustomTkinter button and switch interactions.
+                    w.bind("<Enter>", on_enter, add="+")
+                    w.bind("<Leave>", on_leave, add="+")
                     for child in w.winfo_children():
                         bind_hover(child)
                 bind_hover(row)
-                def open_pick(idx=i):
+                def open_pick(target=app):
                     import re
+                    if self._app_picker_window is not None:
+                        try:
+                            if self._app_picker_window.winfo_exists():
+                                self._app_picker_window.lift()
+                                self._app_picker_window.focus_force()
+                                return
+                        except TclError:
+                            self._app_picker_window = None
                     win = ctk.CTkToplevel(self.root)
+                    self._app_picker_window = win
                     win.title("更换程序")
                     # 弹窗居中打开
                     w,h = 260,350
@@ -469,37 +513,54 @@ class SmoothScrollGUI:
                     y = self.root.winfo_y() + (self.root.winfo_height() - h)//2
                     win.geometry(f"{w}x{h}+{x}+{y}")
                     win.attributes("-topmost", True)
+                    def close_picker():
+                        if self._app_picker_window is win:
+                            self._app_picker_window = None
+                        win.destroy()
+                    win.protocol("WM_DELETE_WINDOW", close_picker)
                     scroll = ctk.CTkScrollableFrame(win)
                     scroll.pack(fill="both", expand=True, padx=5, pady=5)
                     # 打开弹窗重新枚举最新窗口
                     windows = self.get_visible_window_exes()
                     # 已存在的规则，排除当前条目本身
                     existing = set()
-                    for j, app in enumerate(self.config.app_configs):
-                        if j != idx and app.regexp and app.regexp.pattern != '.*':
-                            existing.add(app.regexp.pattern.replace('.exe', ''))
+                    for existing_rule in self.config.app_configs:
+                        if existing_rule is not target and existing_rule.regexp and existing_rule.regexp.pattern != '.*':
+                            existing.add(existing_rule.regexp.pattern)
                     def change_rule(name):
-                        self.config.app_configs[idx].regexp = re.compile(name + '.exe')
+                        target.regexp = re.compile(re.escape(name) + r'\.exe')
                         self.auto_save_config()
                         self.populate_apps_list()
-                        win.destroy()
+                        close_picker()
                     for w_name in windows:
-                        if w_name in existing:
+                        if re.escape(w_name) + r'\.exe' in existing:
                             ctk.CTkButton(scroll, text=w_name+"（已存在）", fg_color="gray25", state="disabled").pack(fill="x", pady=1)
                         else:
                             ctk.CTkButton(scroll, text=w_name, fg_color="transparent", command=lambda name=w_name: change_rule(name)).pack(fill="x", pady=1)
-                lbl.bind("<Button-1>", lambda e, idx=i: open_pick(idx))
-                row.bind("<Button-1>", lambda e, idx=i: open_pick(idx))
-        ctk.CTkButton(self.apps_scrollable, text="+ 新建规则", fg_color="transparent", command=self.new_app, anchor="w").pack(fill="x", pady=6, padx=2)
+                lbl.bind("<Button-1>", lambda e, pick=open_pick: pick())
+        ctk.CTkButton(self.apps_scrollable, text="+ 添加禁用例外", fg_color="transparent", command=self.new_app, anchor="w").pack(fill="x", pady=6, padx=2)
 
-    def del_app(self, idx):
-        self.config.app_configs = self.config.app_configs[:idx] + self.config.app_configs[idx+1:]
+    def del_app(self, target):
+        # Delete by the rule object rendered in this row. The global rule is
+        # hidden from the list, so a visual row number is not a stable index.
+        self.config.app_configs = tuple(
+            app for app in self.config.app_configs if app is not target
+        )
         self.populate_apps_list()
         self.auto_save_config()
 
     def new_app(self):
         import re
+        if self._app_picker_window is not None:
+            try:
+                if self._app_picker_window.winfo_exists():
+                    self._app_picker_window.lift()
+                    self._app_picker_window.focus_force()
+                    return
+            except TclError:
+                self._app_picker_window = None
         win = ctk.CTkToplevel(self.root)
+        self._app_picker_window = win
         win.title("选择要添加的程序")
         w,h = 260,350
         self.root.update_idletasks()
@@ -507,6 +568,11 @@ class SmoothScrollGUI:
         y = self.root.winfo_y() + (self.root.winfo_height() - h)//2
         win.geometry(f"{w}x{h}+{x}+{y}")
         win.attributes("-topmost", True)
+        def close_picker():
+            if self._app_picker_window is win:
+                self._app_picker_window = None
+            win.destroy()
+        win.protocol("WM_DELETE_WINDOW", close_picker)
         scroll = ctk.CTkScrollableFrame(win)
         scroll.pack(fill="both", expand=True, padx=5, pady=5)
         # 打开弹窗时重新枚举最新窗口列表
@@ -515,14 +581,16 @@ class SmoothScrollGUI:
         existing = set()
         for app in self.config.app_configs:
             if app.regexp and app.regexp.pattern != '.*':
-                existing.add(app.regexp.pattern.replace('.exe', ''))
+                existing.add(app.regexp.pattern)
         def add_rule(name):
-            self.config.app_configs = self.config.app_configs + (AppConfig(path=None, regexp=re.compile(name + '.exe'), enabled=True),)
+            self.config.app_configs = self.config.app_configs + (
+                AppConfig(path=None, regexp=re.compile(re.escape(name) + r'\.exe'), enabled=True),
+            )
             self.auto_save_config()
             self.populate_apps_list()
-            win.destroy()
+            close_picker()
         for w_name in windows:
-            if w_name in existing:
+            if re.escape(w_name) + r'\.exe' in existing:
                 # 已存在的程序，按钮灰掉，不可点
                 ctk.CTkButton(scroll, text=w_name+"（已存在）", fg_color="gray25", state="disabled").pack(fill="x", pady=1)
             else:
@@ -616,9 +684,9 @@ class SmoothScrollGUI:
         self.save_timer = self.root.after(500, self._write_config)
 
     def _write_config(self):
-        self.update_global_config()
-        config_path = os.path.join(get_app_directory(), "config.json")
         try:
+            self.update_global_config()
+            config_path = os.path.join(get_app_directory(), "config.json")
             data = self.serialize_config()
             with open(config_path, 'w') as f:
                 json.dump(data, f, indent=4)
@@ -628,6 +696,8 @@ class SmoothScrollGUI:
                 self.start_smooth_scroll()
         except Exception as e:
             messagebox.showerror(self.lang.get('error'), str(e))
+        finally:
+            self.save_timer = None
 
     def serialize_config(self):
         data = {
@@ -641,9 +711,12 @@ class SmoothScrollGUI:
         for app in self.config.app_configs:
             app_data = {
                 "path": app.path,
-                "regexp": app.regexp.pattern if app.regexp else None,
-                "enabled": app.enabled
+                "regexp": app.regexp.pattern if app.regexp else None
             }
+            if app.regexp and app.regexp.pattern == '.*':
+                app_data["enabled"] = app.enabled
+            else:
+                app_data["exception_active"] = app.exception_active
             if app.scroll_config:
                 app_data["scroll_config"] = {
                     "distance": app.scroll_config.distance,
@@ -689,7 +762,8 @@ class SmoothScrollGUI:
                 path=app_data.get("path"),
                 regexp=app_data.get("regexp"),
                 enabled=app_data.get("enabled", True),
-                scroll_config=scroll_config
+                scroll_config=scroll_config,
+                exception_active=app_data.get("exception_active", app_data.get("enabled", True))
             )
             apps.append(app)
 

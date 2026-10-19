@@ -15,7 +15,14 @@ user32 = WinDLL('user32', use_last_error=True)
 
 def resolve_scroll_config(app_configs, current_app_path):
     """Resolve the effective rule without applying any Windows side effects."""
-    global_config = None
+    if not current_app_path:
+        return None
+    app_configs = tuple(app_configs)
+    global_config = next(
+        (app_config for app_config in reversed(app_configs)
+         if app_config.regexp and app_config.regexp.pattern == '.*'),
+        None
+    )
     special_config = None
     has_special_rule = False
 
@@ -27,12 +34,17 @@ def resolve_scroll_config(app_configs, current_app_path):
         if not match:
             continue
         if is_global:
-            global_config = app_config
             continue
 
         has_special_rule = True
         # A matching disabled custom rule is an explicit opt-out.
-        special_config = app_config.scroll_config if app_config.enabled else None
+        # Custom entries are disable exceptions. An active exception blocks
+        # scrolling; disabling the exception restores global fallback.
+        special_config = None if app_config.exception_active else (
+            global_config.scroll_config
+            if global_config and global_config.enabled
+            else None
+        )
 
     if has_special_rule:
         return special_config
@@ -68,18 +80,23 @@ class MouseListener(Thread):
         self._stop_event.set()
 
     def _low_level_mouse_handler(self, n_code, w_param, l_param):
+        if n_code < 0:
+            return user32.CallNextHookEx(c_int(0), n_code, w_param, l_param)
         if w_param == WM_MOUSEWHEEL:
             if not l_param.contents.reserved:
-                scroll_config = None
-                current_app_path = get_current_app_path()
-                scroll_config = resolve_scroll_config(self.config.app_configs, current_app_path)
-                if scroll_config:
-                    self._callback(
-                        l_param.contents.data / (2 << 15) * (-1 if scroll_config.inverted else 1),
-                        bool(GetAsyncKeyState(scroll_config.horizontal_scroll_key)),
-                        scroll_config
-                    )
-                    return 1  # to prevent processing by the system
+                try:
+                    current_app_path = get_current_app_path()
+                    scroll_config = resolve_scroll_config(self.config.app_configs, current_app_path)
+                    if scroll_config:
+                        self._callback(
+                            l_param.contents.data / (2 << 15) * (-1 if scroll_config.inverted else 1),
+                            bool(GetAsyncKeyState(scroll_config.horizontal_scroll_key)),
+                            scroll_config
+                        )
+                        return 1  # to prevent processing by the system
+                except Exception:
+                    # Preserve native scrolling if lookup or callback fails.
+                    pass
         return user32.CallNextHookEx(c_int(0), n_code, w_param, l_param)
 
     def listen(self) -> None:
@@ -97,14 +114,27 @@ def scroll(delta: int, is_horizontal: bool = False) -> None:
     mouse_event(MOUSEEVENTF_HWHEEL if is_horizontal else MOUSEEVENTF_WHEEL, 0, 0, delta, 0)
 
 
-def get_current_app_path() -> str:
-    cursor_pos = GetCursorPos()
-    active_hwnd = WindowFromPoint(cursor_pos)
-    tid, pid = GetWindowThreadProcessId(active_hwnd)
-    h_process = OpenProcess(MAXIMUM_ALLOWED, 0, pid)
-    current_app_path = GetModuleFileNameEx(h_process, None)
-    CloseHandle(h_process)
-    return current_app_path.replace('\\', r'/')
+def get_current_app_path() -> str | None:
+    h_process = None
+    try:
+        cursor_pos = GetCursorPos()
+        active_hwnd = WindowFromPoint(cursor_pos)
+        _, pid = GetWindowThreadProcessId(active_hwnd)
+        if not pid:
+            return None
+        h_process = OpenProcess(MAXIMUM_ALLOWED, 0, pid)
+        if not h_process:
+            return None
+        current_app_path = GetModuleFileNameEx(h_process, None)
+        return current_app_path.replace('\\', r'/') if current_app_path else None
+    except Exception:
+        return None
+    finally:
+        if h_process:
+            try:
+                CloseHandle(h_process)
+            except Exception:
+                pass
 
 
 def get_display_frequency() -> int:

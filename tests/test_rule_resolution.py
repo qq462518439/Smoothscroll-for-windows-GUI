@@ -17,21 +17,34 @@ class RuleResolutionTests(unittest.TestCase):
         rules = [AppConfig(regexp=r'.*', enabled=False, scroll_config=self.global_config)]
         self.assertIsNone(resolve_scroll_config(rules, r'C:/Apps/example.exe'))
 
-    def test_disabled_custom_rule_does_not_fall_back_to_global(self):
+    def test_active_exception_disables_scroll(self):
         rules = [
             AppConfig(regexp=r'.*', enabled=True, scroll_config=self.global_config),
-            AppConfig(regexp=r'example\.exe', enabled=False, scroll_config=self.special_config),
+            AppConfig(regexp=r'example\.exe', exception_active=True, scroll_config=self.special_config),
         ]
         self.assertIsNone(resolve_scroll_config(rules, r'C:/Apps/example.exe'))
 
-    def test_last_matching_custom_rule_wins(self):
-        later_config = object()
+    def test_last_matching_exception_state_wins(self):
         rules = [
             AppConfig(regexp=r'.*', enabled=True, scroll_config=self.global_config),
-            AppConfig(regexp=r'example\.exe', enabled=True, scroll_config=self.special_config),
-            AppConfig(regexp=r'example\.exe', enabled=True, scroll_config=later_config),
+            AppConfig(regexp=r'example\.exe', exception_active=True),
+            AppConfig(regexp=r'example\.exe', exception_active=False),
         ]
-        self.assertIs(resolve_scroll_config(rules, r'C:/Apps/example.exe'), later_config)
+        self.assertIs(resolve_scroll_config(rules, r'C:/Apps/example.exe'), self.global_config)
+
+    def test_inactive_exception_falls_back_to_global(self):
+        rules = [
+            AppConfig(regexp=r'.*', enabled=True, scroll_config=self.global_config),
+            AppConfig(regexp=r'example\.exe', exception_active=False),
+        ]
+        self.assertIs(resolve_scroll_config(rules, r'C:/Apps/example.exe'), self.global_config)
+
+    def test_exception_state_is_independent_of_global_fallback_state(self):
+        rules = [
+            AppConfig(regexp=r'.*', enabled=False, scroll_config=self.global_config),
+            AppConfig(regexp=r'example\.exe', exception_active=False),
+        ]
+        self.assertIsNone(resolve_scroll_config(rules, r'C:/Apps/example.exe'))
 
 
 if __name__ == '__main__':
