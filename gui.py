@@ -426,7 +426,9 @@ class SmoothScrollGUI:
             w.destroy()
         for i, app in enumerate(self.config.app_configs):
             is_global = app.regexp and app.regexp.pattern == '.*'
-            row = ctk.CTkFrame(self.apps_scrollable, fg_color="#3a3a3a" if is_global else "transparent", corner_radius=4)
+            if is_global:
+                continue
+            row = ctk.CTkFrame(self.apps_scrollable, fg_color="transparent", corner_radius=4)
             row.pack(fill="x", pady=3, padx=2)
             if not is_global:
                 ctk.CTkButton(row, text="删除", width=40, height=24, fg_color="transparent", command=lambda idx=i: self.del_app(idx)).pack(side="right", padx=4)
