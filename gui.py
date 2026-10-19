@@ -292,6 +292,7 @@ class SmoothScrollGUI:
         self._tray_poll_id = None
         self._closing = False
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.bind("<Unmap>", self._handle_minimize_to_tray, add="+")
 
         self.load_config()  # Load config first to set language
         self.create_tray_icon()
@@ -900,15 +901,21 @@ class SmoothScrollGUI:
             draw = ImageDraw.Draw(image)
             draw.ellipse((16, 16, 48, 48), fill='white')
 
-        # Create menu
-        menu = pystray.Menu(
-            pystray.MenuItem(self.lang.get('tray_open'), lambda _icon, _item: self._queue_tray_action(self.show_window)),
-            pystray.MenuItem(lambda _item: self.lang.get('stop') if self.smooth_scroll else self.lang.get('start'), lambda _icon, _item: self._queue_tray_action(self.toggle_smooth_scroll)),
-            pystray.MenuItem(self.lang.get('tray_quit'), lambda _icon, _item: self._queue_tray_action(self.quit_app))
-        )
+        menu = self._create_tray_menu()
 
         self.tray_icon = pystray.Icon("SmoothScroll", image, "SmoothScroll", menu)
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
+
+    def _create_tray_menu(self):
+        return pystray.Menu(
+            pystray.MenuItem(
+                self.lang.get('tray_open'),
+                lambda _icon, _item: self._queue_tray_action(self.show_window),
+                default=True,
+            ),
+            pystray.MenuItem(lambda _item: self.lang.get('stop') if self.smooth_scroll else self.lang.get('start'), lambda _icon, _item: self._queue_tray_action(self.toggle_smooth_scroll)),
+            pystray.MenuItem(self.lang.get('tray_quit'), lambda _icon, _item: self._queue_tray_action(self.quit_app))
+        )
 
     def _queue_tray_action(self, action):
         self._tray_actions.put(action)
@@ -943,6 +950,14 @@ class SmoothScrollGUI:
 
     def on_close(self):
         self.root.withdraw()  # Hide window instead of closing
+
+    def _handle_minimize_to_tray(self, _event=None):
+        if self.root.state() == "iconic":
+            self.root.after_idle(self._hide_if_minimized)
+
+    def _hide_if_minimized(self):
+        if self.root.state() == "iconic":
+            self.root.withdraw()
 
     def show_window(self):
         self.root.deiconify()  # Show window

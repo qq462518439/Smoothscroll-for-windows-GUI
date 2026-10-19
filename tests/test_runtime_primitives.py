@@ -230,6 +230,43 @@ class GuiCallbackTests(unittest.TestCase):
 
         self.assertEqual(calls, ["ran"])
 
+    def test_tray_left_activation_defaults_to_open_window(self):
+        from gui import SmoothScrollGUI, Lang
+
+        queued = []
+        app = SmoothScrollGUI.__new__(SmoothScrollGUI)
+        app.lang = Lang("en")
+        app._queue_tray_action = queued.append
+        app.show_window = lambda: None
+        app.toggle_smooth_scroll = lambda: None
+        app.quit_app = lambda: None
+        menu = SmoothScrollGUI._create_tray_menu(app)
+
+        self.assertTrue(menu.items[0].default)
+        menu.items[0](None)
+        self.assertIs(queued[0], app.show_window)
+
+    def test_minimize_hides_only_after_window_enters_iconic_state(self):
+        from types import SimpleNamespace
+        from gui import SmoothScrollGUI
+
+        pending = []
+        withdrawn = []
+        app = SmoothScrollGUI.__new__(SmoothScrollGUI)
+        app.root = SimpleNamespace(
+            state=lambda: "iconic",
+            after_idle=pending.append,
+            withdraw=lambda: withdrawn.append(True),
+        )
+        SmoothScrollGUI._handle_minimize_to_tray(app)
+        self.assertEqual(withdrawn, [])
+        pending.pop()()
+        self.assertEqual(withdrawn, [True])
+
+        app.root.state = lambda: "withdrawn"
+        SmoothScrollGUI._handle_minimize_to_tray(app)
+        self.assertEqual(pending, [])
+
     def test_script_autostart_command_targets_gui_entrypoint(self):
         from unittest.mock import patch
         from gui import SmoothScrollGUI

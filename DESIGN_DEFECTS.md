@@ -24,6 +24,8 @@ they can be tested without a live Windows desktop.
 - Tray actions are marshalled to the Tk event loop. Single-instance ownership
   uses a Windows named mutex. Exact paths and regex matching are
   case-insensitive, consistent with Windows paths.
+- The tray Open menu entry is the default activation action; minimizing the
+  window withdraws it only after Tk reports the `iconic` state.
 - Exception-list semantics remain: an active entry disables that app; an
   inactive entry restores global fallback; custom entries consume global
   parameters rather than owning separate scroll settings.

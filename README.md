@@ -10,7 +10,7 @@ A modern, user-friendly GUI application for smooth scrolling on Windows. This is
 - **Smooth Scrolling**: Provides inertial, customizable smooth scrolling for all Windows applications.
 - **Graphical User Interface**: Modern, intuitive GUI built with CustomTkinter.
 - **Application Exceptions**: Exclude selected applications from smooth scrolling; all other applications use the global parameters.
-- **System Tray Integration**: Minimize to tray, start automatically with Windows.
+- **System Tray Integration**: Minimizing hides the window to the tray; left-clicking or double-clicking the tray icon opens it. The app can also start with Windows.
 - **Multi-Language Support**: English, Russian, and Chinese.
 - **Theme Support**: Light, Dark, and System appearance modes.
 - **Autostart**: Option to launch automatically on Windows startup.
@@ -35,10 +35,14 @@ pip install -r requirements.txt
 `requirements.txt` installs the runtime and GUI dependencies.
 
 ### Building Executable
-To create a standalone .exe file:
+On Windows, install the runtime dependencies and PyInstaller, then run the build script:
 ```bash
-pyinstaller --onefile --name SmoothScrollGUI.exe --icon icon.ico --add-data "icon.ico;." --add-data "icon.png;." --noconsole main.py
+python -m pip install -r requirements.txt
+python -m pip install pyinstaller
+build_exe.bat
 ```
+
+The standalone executable is written to `dist/SmoothScrollGUI.exe`.
 
 ## 📖 Usage
 
