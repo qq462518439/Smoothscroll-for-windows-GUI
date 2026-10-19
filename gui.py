@@ -4,7 +4,7 @@ from tkinter import filedialog, messagebox
 from typing import Optional
 import easing_functions
 import pystray
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageTk
 import threading
 import winreg
 import os
@@ -208,7 +208,7 @@ class Lang:
                 'autostart_enabled': '开机自启已开启',
                 'autostart_disabled': '开机自启已关闭',
                 'appearance_applied': '外观设置已生效。',
-                'restart_for_lang': '重启应用以应用语言更改，别忘了点击保存按钮。',
+                'restart_for_lang': '切换语言需要重启程序生效。',
                 'select_app': '请选择要',
                 'add_app': '添加应用',
                 'edit_app': '编辑应用',
@@ -267,6 +267,7 @@ class SmoothScrollGUI:
         self.root.geometry("900x780")
         try:
             self.root.iconbitmap(resource_path('icon.ico'))
+            self.root.iconphoto(True, ImageTk.PhotoImage(Image.open(resource_path('icon.png'))))
         except:
             pass  # Icon not found, use default
 
@@ -463,6 +464,9 @@ class SmoothScrollGUI:
         ctk.CTkButton(dialog, text=self.lang.get('save_btn'), command=save).grid(row=3, column=0, columnspan=2, pady=10)
 
     def remove_app(self):
+        if self.selected_app_index == 0:
+            messagebox.showwarning(self.lang.get('warning'), '全局默认规则不可删除')
+            return
         if self.selected_app_index is not None:
             self.config.app_configs = self.config.app_configs[:self.selected_app_index] + self.config.app_configs[self.selected_app_index+1:]
             self.populate_apps_list()
@@ -473,6 +477,9 @@ class SmoothScrollGUI:
     def edit_app(self):
         if self.selected_app_index is None:
             messagebox.showwarning(self.lang.get('warning'), self.lang.get('select_app') + " " + self.lang.get('edit').lower())
+            return
+        if self.selected_app_index == 0:
+            messagebox.showwarning(self.lang.get('warning'), '全局默认规则不可编辑路径/正则，只能修改滚动参数')
             return
         app = self.config.app_configs[self.selected_app_index]
 
@@ -532,7 +539,13 @@ class SmoothScrollGUI:
         ctk.set_appearance_mode(mode)
 
     def change_language(self, lang):
+        if lang == self.lang.lang:
+            return
         self.lang.lang = lang
+        self.auto_save_config()
+        if messagebox.askyesno(self.lang.get('info'), self.lang.get('restart_for_lang') + '\n\n是否立即重启？'):
+            self.quit_app()
+            os.startfile(sys.executable)
 
     def change_color_theme(self, theme):
         if theme == "red":
