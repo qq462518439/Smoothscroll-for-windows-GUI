@@ -264,7 +264,7 @@ class SmoothScrollGUI:
 
         self.root = root
         self.root.title("SmoothScroll for Windows GUI")
-        self.root.geometry("900x780")
+        self.root.geometry("500x700")
         try:
             self.root.iconbitmap(resource_path('icon.ico'))
             self.root.iconphoto(True, ImageTk.PhotoImage(Image.open(resource_path('icon.png'))))
@@ -401,114 +401,130 @@ class SmoothScrollGUI:
 
         # Remove autostart from global settings
 
+    def get_visible_window_exes(self):
+        import win32gui
+        import win32process
+        exes = set()
+        def cb(hwnd, _):
+            if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd):
+                _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                try:
+                    name = psutil.Process(pid).name().replace('.exe', '')
+                    exes.add(name)
+                except:
+                    pass
+        win32gui.EnumWindows(cb, None)
+        return sorted(list(exes))
+
     def create_apps_settings(self):
-        # Scrollable frame for apps
-        self.apps_scrollable = ctk.CTkScrollableFrame(self.apps_frame)
+        self.apps_scrollable = ctk.CTkScrollableFrame(self.apps_frame, scrollbar_button_color="#242424", scrollbar_button_hover_color="#3a3a3a")
         self.apps_scrollable.pack(fill="both", expand=True, padx=10, pady=10)
-
-        # Buttons for apps
-        apps_buttons = ctk.CTkFrame(self.apps_frame)
-        apps_buttons.pack(fill="x", pady=5, padx=10)
-        ctk.CTkButton(apps_buttons, text=self.lang.get('add'), command=self.add_app).pack(side="left", padx=5)
-        ctk.CTkButton(apps_buttons, text=self.lang.get('remove'), command=self.remove_app).pack(side="left", padx=5)
-        ctk.CTkButton(apps_buttons, text=self.lang.get('edit'), command=self.edit_app).pack(side="left", padx=5)
-
-        self.app_buttons = []
         self.populate_apps_list()
 
     def populate_apps_list(self):
-        for btn in self.app_buttons:
-            btn.destroy()
-        self.app_buttons = []
+        for w in self.apps_scrollable.winfo_children():
+            w.destroy()
         for i, app in enumerate(self.config.app_configs):
-            text = f"{self.lang.get('app_list_path')}: {app.path or 'None'} | {self.lang.get('app_list_regexp')}: {app.regexp.pattern if app.regexp else 'None'} | {self.lang.get('app_list_enabled')}: {app.enabled}"
-            btn = ctk.CTkButton(self.apps_scrollable, text=text, command=lambda idx=i: self.select_app(idx))
-            btn.pack(fill="x", pady=2)
-            self.app_buttons.append(btn)
-        self.selected_app_index = None
-
-    def select_app(self, index):
-        self.selected_app_index = index
-        for i, btn in enumerate(self.app_buttons):
-            if i == index:
-                btn.configure(fg_color="lightblue")  # Highlight selected
+            is_global = app.regexp and app.regexp.pattern == '.*'
+            row = ctk.CTkFrame(self.apps_scrollable, fg_color="#3a3a3a" if is_global else "transparent", corner_radius=4)
+            row.pack(fill="x", pady=3, padx=2)
+            if not is_global:
+                ctk.CTkButton(row, text="删除", width=40, height=24, fg_color="transparent", command=lambda idx=i: self.del_app(idx)).pack(side="right", padx=4)
+            enable_var = ctk.BooleanVar(value=app.enabled)
+            def toggle(idx=i, var=enable_var):
+                self.config.app_configs[idx].enabled = var.get()
+                self.auto_save_config()
+                # 立刻热重载，不用点总开关
+                if self.smooth_scroll:
+                    self.stop_smooth_scroll()
+                    self.start_smooth_scroll()
+            ctk.CTkSwitch(row, text="", width=32, variable=enable_var, command=toggle).pack(side="right", padx=6)
+            if is_global:
+                ctk.CTkLabel(row, text="全局默认", anchor="w", font=ctk.CTkFont(size=14)).pack(side="left", padx=10, pady=8, fill="x", expand=True)
             else:
-                btn.configure(fg_color=["#3B8ED0", "#1F6AA5"])  # Default
+                current = app.regexp.pattern.replace('.exe', '') if app.regexp else "未选择程序"
+                lbl = ctk.CTkLabel(row, text=current, anchor="w", font=ctk.CTkFont(size=14))
+                lbl.pack(side="left", padx=10, pady=8, fill="x", expand=True)
+                # hover提示：鼠标移到行任意位置都变明显浅灰，离开变回透明
+                def on_enter(e, r=row):
+                    r.configure(fg_color="#3a3a3a")
+                def on_leave(e, r=row):
+                    r.configure(fg_color="transparent")
+                def bind_hover(w):
+                    w.bind("<Enter>", on_enter)
+                    w.bind("<Leave>", on_leave)
+                    for child in w.winfo_children():
+                        bind_hover(child)
+                bind_hover(row)
+                def open_pick(idx=i):
+                    import re
+                    win = ctk.CTkToplevel(self.root)
+                    win.title("更换程序")
+                    # 弹窗居中打开
+                    w,h = 260,350
+                    self.root.update_idletasks()
+                    x = self.root.winfo_x() + (self.root.winfo_width() - w)//2
+                    y = self.root.winfo_y() + (self.root.winfo_height() - h)//2
+                    win.geometry(f"{w}x{h}+{x}+{y}")
+                    win.attributes("-topmost", True)
+                    scroll = ctk.CTkScrollableFrame(win)
+                    scroll.pack(fill="both", expand=True, padx=5, pady=5)
+                    # 打开弹窗重新枚举最新窗口
+                    windows = self.get_visible_window_exes()
+                    # 已存在的规则，排除当前条目本身
+                    existing = set()
+                    for j, app in enumerate(self.config.app_configs):
+                        if j != idx and app.regexp and app.regexp.pattern != '.*':
+                            existing.add(app.regexp.pattern.replace('.exe', ''))
+                    def change_rule(name):
+                        self.config.app_configs[idx].regexp = re.compile(name + '.exe')
+                        self.auto_save_config()
+                        self.populate_apps_list()
+                        win.destroy()
+                    for w_name in windows:
+                        if w_name in existing:
+                            ctk.CTkButton(scroll, text=w_name+"（已存在）", fg_color="gray25", state="disabled").pack(fill="x", pady=1)
+                        else:
+                            ctk.CTkButton(scroll, text=w_name, fg_color="transparent", command=lambda name=w_name: change_rule(name)).pack(fill="x", pady=1)
+                lbl.bind("<Button-1>", lambda e, idx=i: open_pick(idx))
+                row.bind("<Button-1>", lambda e, idx=i: open_pick(idx))
+        ctk.CTkButton(self.apps_scrollable, text="+ 新建规则", fg_color="transparent", command=self.new_app, anchor="w").pack(fill="x", pady=6, padx=2)
 
-    def add_app(self):
-        # Simple dialog for new app using ctk
-        dialog = ctk.CTkToplevel(self.root)
-        dialog.title(self.lang.get('add_app'))
-        dialog.geometry(f"250x150+{self.root.winfo_x() + 50}+{self.root.winfo_y() + 50}")
-        dialog.attributes("-topmost", True)
-        dialog.focus()
+    def del_app(self, idx):
+        self.config.app_configs = self.config.app_configs[:idx] + self.config.app_configs[idx+1:]
+        self.populate_apps_list()
+        self.auto_save_config()
 
-        ctk.CTkLabel(dialog, text=self.lang.get('path')).grid(row=0, column=0, sticky="w", padx=5, pady=2)
-        path_var = ctk.StringVar()
-        ctk.CTkEntry(dialog, textvariable=path_var).grid(row=0, column=1, padx=5, pady=2)
-
-        ctk.CTkLabel(dialog, text=self.lang.get('regexp')).grid(row=1, column=0, sticky="w", padx=5, pady=2)
-        regexp_var = ctk.StringVar()
-        ctk.CTkEntry(dialog, textvariable=regexp_var).grid(row=1, column=1, padx=5, pady=2)
-
-        enabled_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(dialog, text=self.lang.get('enabled'), variable=enabled_var).grid(row=2, column=0, columnspan=2, pady=2)
-
-        def save():
-            app = AppConfig(path=path_var.get() or None, regexp=regexp_var.get() or None, enabled=enabled_var.get())
-            self.config.app_configs = self.config.app_configs + (app,)
-            self.populate_apps_list()
+    def new_app(self):
+        import re
+        win = ctk.CTkToplevel(self.root)
+        win.title("选择要添加的程序")
+        w,h = 260,350
+        self.root.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - w)//2
+        y = self.root.winfo_y() + (self.root.winfo_height() - h)//2
+        win.geometry(f"{w}x{h}+{x}+{y}")
+        win.attributes("-topmost", True)
+        scroll = ctk.CTkScrollableFrame(win)
+        scroll.pack(fill="both", expand=True, padx=5, pady=5)
+        # 打开弹窗时重新枚举最新窗口列表
+        windows = self.get_visible_window_exes()
+        # 已存在的规则程序名
+        existing = set()
+        for app in self.config.app_configs:
+            if app.regexp and app.regexp.pattern != '.*':
+                existing.add(app.regexp.pattern.replace('.exe', ''))
+        def add_rule(name):
+            self.config.app_configs = self.config.app_configs + (AppConfig(path=None, regexp=re.compile(name + '.exe'), enabled=True),)
             self.auto_save_config()
-            dialog.destroy()
-
-        ctk.CTkButton(dialog, text=self.lang.get('save_btn'), command=save).grid(row=3, column=0, columnspan=2, pady=10)
-
-    def remove_app(self):
-        if self.selected_app_index == 0:
-            messagebox.showwarning(self.lang.get('warning'), '全局默认规则不可删除')
-            return
-        if self.selected_app_index is not None:
-            self.config.app_configs = self.config.app_configs[:self.selected_app_index] + self.config.app_configs[self.selected_app_index+1:]
             self.populate_apps_list()
-            self.auto_save_config()
-        else:
-            messagebox.showwarning(self.lang.get('warning'), self.lang.get('select_app') + " " + self.lang.get('remove').lower())
-
-    def edit_app(self):
-        if self.selected_app_index is None:
-            messagebox.showwarning(self.lang.get('warning'), self.lang.get('select_app') + " " + self.lang.get('edit').lower())
-            return
-        if self.selected_app_index == 0:
-            messagebox.showwarning(self.lang.get('warning'), '全局默认规则不可编辑路径/正则，只能修改滚动参数')
-            return
-        app = self.config.app_configs[self.selected_app_index]
-
-        # Dialog for editing app
-        dialog = ctk.CTkToplevel(self.root)
-        dialog.title(self.lang.get('edit_app'))
-        dialog.geometry(f"250x150+{self.root.winfo_x() + 50}+{self.root.winfo_y() + 50}")
-        dialog.attributes("-topmost", True)
-        dialog.focus()
-
-        ctk.CTkLabel(dialog, text=self.lang.get('path')).grid(row=0, column=0, sticky="w", padx=5, pady=2)
-        path_var = ctk.StringVar(value=app.path or "")
-        ctk.CTkEntry(dialog, textvariable=path_var).grid(row=0, column=1, padx=5, pady=2)
-
-        ctk.CTkLabel(dialog, text=self.lang.get('regexp')).grid(row=1, column=0, sticky="w", padx=5, pady=2)
-        regexp_var = ctk.StringVar(value=app.regexp.pattern if app.regexp else "")
-        ctk.CTkEntry(dialog, textvariable=regexp_var).grid(row=1, column=1, padx=5, pady=2)
-
-        enabled_var = ctk.BooleanVar(value=app.enabled)
-        ctk.CTkCheckBox(dialog, text=self.lang.get('enabled'), variable=enabled_var).grid(row=2, column=0, columnspan=2, pady=2)
-
-        def save():
-            new_app = AppConfig(path=path_var.get() or None, regexp=regexp_var.get() or None, enabled=enabled_var.get())
-            self.config.app_configs = self.config.app_configs[:self.selected_app_index] + (new_app,) + self.config.app_configs[self.selected_app_index+1:]
-            self.populate_apps_list()
-            self.auto_save_config()
-            dialog.destroy()
-
-        ctk.CTkButton(dialog, text=self.lang.get('save_btn'), command=save).grid(row=3, column=0, columnspan=2, pady=10)
+            win.destroy()
+        for w_name in windows:
+            if w_name in existing:
+                # 已存在的程序，按钮灰掉，不可点
+                ctk.CTkButton(scroll, text=w_name+"（已存在）", fg_color="gray25", state="disabled").pack(fill="x", pady=1)
+            else:
+                ctk.CTkButton(scroll, text=w_name, fg_color="transparent", command=lambda name=w_name: add_rule(name)).pack(fill="x", pady=1)
 
     def create_app_settings(self):
         frame = ctk.CTkScrollableFrame(self.app_settings_frame)

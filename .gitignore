@@ -136,3 +136,4 @@ SmoothScroll.exe.spec
 /dev
 /dist
 /build
+config.json
