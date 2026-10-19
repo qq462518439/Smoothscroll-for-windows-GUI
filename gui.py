@@ -275,6 +275,7 @@ class SmoothScrollGUI:
         self.auto_start = auto_start
         self.start_minimized = start_minimized
         self.lang = Lang('en')  # Default language
+        self.save_timer = None
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.load_config()  # Load config first to set language
@@ -338,9 +339,8 @@ class SmoothScrollGUI:
         self.control_frame = ctk.CTkFrame(self.root)
         self.control_frame.pack(fill="x", pady=10, padx=20)
 
-        ctk.CTkButton(self.control_frame, text=self.lang.get('save'), command=self.save_config).pack(side="left", padx=5)
-        ctk.CTkButton(self.control_frame, text=self.lang.get('start'), command=self.start_smooth_scroll).pack(side="left", padx=5)
-        ctk.CTkButton(self.control_frame, text=self.lang.get('stop'), command=self.stop_smooth_scroll).pack(side="left", padx=5)
+        self.toggle_btn = ctk.CTkButton(self.control_frame, text=self.lang.get('start'), command=self.toggle_smooth_scroll, fg_color="#2E7D32", hover_color="#1B5E20")
+        self.toggle_btn.pack(side="right", padx=5)
 
     def create_global_settings(self):
         # Assuming global config is the first AppConfig with regexp .*
@@ -391,6 +391,12 @@ class SmoothScrollGUI:
         current_key = {VK_SHIFT: "VK_SHIFT", VK_CONTROL: "VK_CONTROL", VK_MENU: "VK_MENU"}.get(global_config.horizontal_scroll_key, "VK_SHIFT")
         self.horizontal_key_var = ctk.StringVar(value=current_key)
         ctk.CTkOptionMenu(frame, variable=self.horizontal_key_var, values=key_options).pack(fill="x", pady=2)
+
+        # 绑定所有参数自动保存
+        for var in [self.distance_var, self.acceleration_var, self.opposite_acceleration_var,
+                    self.acceleration_delta_var, self.acceleration_max_var, self.duration_var,
+                    self.pulse_scale_var, self.inverted_var, self.ease_var, self.horizontal_key_var]:
+            var.trace_add("write", self.auto_save_config)
 
         # Remove autostart from global settings
 
@@ -451,6 +457,7 @@ class SmoothScrollGUI:
             app = AppConfig(path=path_var.get() or None, regexp=regexp_var.get() or None, enabled=enabled_var.get())
             self.config.app_configs = self.config.app_configs + (app,)
             self.populate_apps_list()
+            self.auto_save_config()
             dialog.destroy()
 
         ctk.CTkButton(dialog, text=self.lang.get('save_btn'), command=save).grid(row=3, column=0, columnspan=2, pady=10)
@@ -459,6 +466,7 @@ class SmoothScrollGUI:
         if self.selected_app_index is not None:
             self.config.app_configs = self.config.app_configs[:self.selected_app_index] + self.config.app_configs[self.selected_app_index+1:]
             self.populate_apps_list()
+            self.auto_save_config()
         else:
             messagebox.showwarning(self.lang.get('warning'), self.lang.get('select_app') + " " + self.lang.get('remove').lower())
 
@@ -490,6 +498,7 @@ class SmoothScrollGUI:
             new_app = AppConfig(path=path_var.get() or None, regexp=regexp_var.get() or None, enabled=enabled_var.get())
             self.config.app_configs = self.config.app_configs[:self.selected_app_index] + (new_app,) + self.config.app_configs[self.selected_app_index+1:]
             self.populate_apps_list()
+            self.auto_save_config()
             dialog.destroy()
 
         ctk.CTkButton(dialog, text=self.lang.get('save_btn'), command=save).grid(row=3, column=0, columnspan=2, pady=10)
@@ -515,13 +524,15 @@ class SmoothScrollGUI:
         self.start_minimized_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(frame, text=self.lang.get('start_minimized'), variable=self.start_minimized_var).pack(anchor="w", pady=2)
 
+        # 绑定设置项自动保存
+        for var in [self.appearance_var, self.language_var, self.autostart_var, self.start_minimized_var]:
+            var.trace_add("write", self.auto_save_config)
+
     def change_appearance_mode(self, mode):
         ctk.set_appearance_mode(mode)
-        messagebox.showinfo(self.lang.get('info'), self.lang.get('appearance_applied'))
 
     def change_language(self, lang):
         self.lang.lang = lang
-        messagebox.showinfo(self.lang.get('info'), self.lang.get('restart_for_lang'))
 
     def change_color_theme(self, theme):
         if theme == "red":
@@ -567,14 +578,23 @@ class SmoothScrollGUI:
         key_name = self.horizontal_key_var.get()
         global_config.horizontal_scroll_key = {"VK_SHIFT": VK_SHIFT, "VK_CONTROL": VK_CONTROL, "VK_MENU": VK_MENU}.get(key_name, VK_SHIFT)
 
-    def save_config(self):
+    def auto_save_config(self, *args):
+        # 防抖：取消之前的定时器，500ms后再写入
+        if self.save_timer:
+            self.root.after_cancel(self.save_timer)
+        self.save_timer = self.root.after(500, self._write_config)
+
+    def _write_config(self):
         self.update_global_config()
         config_path = os.path.join(get_app_directory(), "config.json")
         try:
             data = self.serialize_config()
             with open(config_path, 'w') as f:
                 json.dump(data, f, indent=4)
-            messagebox.showinfo(self.lang.get('success'), self.lang.get('config_saved') + f" {config_path}")
+            # 运行中自动热重载参数
+            if self.smooth_scroll:
+                self.stop_smooth_scroll()
+                self.start_smooth_scroll()
         except Exception as e:
             messagebox.showerror(self.lang.get('error'), str(e))
 
@@ -674,23 +694,27 @@ class SmoothScrollGUI:
             self.auto_start = True  # Also auto-start SmoothScroll
             self.root.after(100, self.on_close)
 
+    def toggle_smooth_scroll(self):
+        if self.smooth_scroll:
+            self.stop_smooth_scroll()
+        else:
+            self.start_smooth_scroll()
+
     def start_smooth_scroll(self):
         if self.smooth_scroll:
-            messagebox.showwarning(self.lang.get('warning'), self.lang.get('already_running'))
             return
         self.update_global_config()
         self.smooth_scroll = SmoothScroll(self.config)
         self.smooth_scroll.start(is_block=False)
-        if not self.auto_start:
-            messagebox.showinfo(self.lang.get('success'), self.lang.get('smoothscroll_started'))
+        # 更新按钮状态：运行中
+        self.toggle_btn.configure(text=self.lang.get('stop'), fg_color="#C62828", hover_color="#8E0000")
 
     def stop_smooth_scroll(self):
         if self.smooth_scroll:
             self.smooth_scroll.join()
             self.smooth_scroll = None
-            messagebox.showinfo(self.lang.get('success'), self.lang.get('smoothscroll_stopped'))
-        else:
-            messagebox.showwarning(self.lang.get('warning'), self.lang.get('not_running'))
+        # 更新按钮状态：已停止
+        self.toggle_btn.configure(text=self.lang.get('start'), fg_color="#2E7D32", hover_color="#1B5E20")
 
     def create_tray_icon(self):
         # Load icon from file, or create default if not found
@@ -705,6 +729,7 @@ class SmoothScrollGUI:
         # Create menu
         menu = pystray.Menu(
             pystray.MenuItem(self.lang.get('tray_open'), self.show_window),
+            pystray.MenuItem(lambda item: self.lang.get('stop') if self.smooth_scroll else self.lang.get('start'), self.toggle_smooth_scroll),
             pystray.MenuItem(self.lang.get('tray_quit'), self.quit_app)
         )
 
