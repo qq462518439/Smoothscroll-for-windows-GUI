@@ -98,7 +98,13 @@ class Lang:
                 'about_improvements': 'project by re1von, main improvements - GUI.',
                 'about_link': 'Project link:',
                 'about_project_url': 'https://github.com/vadenko/Smoothscroll-for-windows-GUI',
-                'about_version': 'Version: 1.0.2'
+                'about_version': 'Version: 1.0.2',
+                'tray_open': 'Open',
+                'tray_quit': 'Quit',
+                'error_already_running': 'Application is already running.',
+                'app_list_path': 'Path',
+                'app_list_regexp': 'Regexp',
+                'app_list_enabled': 'Enabled'
             },
             'ru': {
                 'title': 'SmoothScroll GUI',
@@ -154,7 +160,75 @@ class Lang:
                 'about_improvements': 'от re1von, основные улучшения - GUI.',
                 'about_link': 'Ссылка на проект:',
                 'about_project_url': 'https://github.com/vadenko/Smoothscroll-for-windows-GUI',
-                'about_version': 'Версия: 1.0.2'
+                'about_version': 'Версия: 1.0.2',
+                'tray_open': 'Открыть',
+                'tray_quit': 'Закрыть',
+                'error_already_running': 'Приложение уже запущено',
+                'app_list_path': 'Путь',
+                'app_list_regexp': 'Рег.выр',
+                'app_list_enabled': 'Вкл'
+            },
+            'zh': {
+                'title': 'SmoothScroll GUI',
+                'global_settings': '全局设置',
+                'apps': '应用程序（例外）',
+                'app_settings': '应用设置',
+                'save': '保存',
+                'start': '启动',
+                'stop': '停止',
+                'appearance_mode': '外观模式',
+                'language': '语言',
+                'autostart': '开机自启',
+                'start_minimized': '启动时最小化到托盘',
+                'distance': '滚动距离（像素，None为自动）：',
+                'acceleration': '加速度：',
+                'opposite_acceleration': '反向加速度：',
+                'acceleration_delta': '加速度增量（毫秒）：',
+                'acceleration_max': '最大加速度：',
+                'duration': '滚动时长（毫秒）：',
+                'pulse_scale': '脉冲缩放：',
+                'inverted': '反转滚动方向',
+                'easing_function': '缓动函数：',
+                'horizontal_scroll_key': '横向滚动快捷键：',
+                'add': '添加',
+                'remove': '删除',
+                'edit': '编辑',
+                'path': '程序路径：',
+                'regexp': '正则匹配规则：',
+                'enabled': '启用',
+                'save_btn': '保存',
+                'success': '操作成功',
+                'error': '错误',
+                'warning': '警告',
+                'config_saved': '配置已保存到：',
+                'smoothscroll_started': '平滑滚动已启动',
+                'smoothscroll_stopped': '平滑滚动已停止',
+                'already_running': '平滑滚动已在运行中',
+                'not_running': '平滑滚动未运行',
+                'autostart_enabled': '开机自启已开启',
+                'autostart_disabled': '开机自启已关闭',
+                'appearance_applied': '外观设置已生效。',
+                'restart_for_lang': '重启应用以应用语言更改，别忘了点击保存按钮。',
+                'select_app': '请选择要',
+                'add_app': '添加应用',
+                'edit_app': '编辑应用',
+                'load_config_error': '加载配置失败',
+                'config_load_success': '配置加载成功',
+                'info': '提示',
+                'about_title': '关于',
+                'about_desc': '本应用为Windows全系统提供平滑鼠标滚轮效果，可在例外设置中排除指定应用，提供丰富参数调节，且自带图形配置界面。',
+                'about_fork': '本应用是',
+                'about_original': 'Smoothscroll-for-windows',
+                'about_improvements': '项目的分支版本，主要改进为新增图形GUI界面。',
+                'about_link': '项目地址：',
+                'about_project_url': 'https://github.com/vadenko/Smoothscroll-for-windows-GUI',
+                'about_version': '版本：1.0.2',
+                'tray_open': '打开主窗口',
+                'tray_quit': '退出',
+                'error_already_running': '应用已在运行中',
+                'app_list_path': '路径',
+                'app_list_regexp': '正则',
+                'app_list_enabled': '已启用'
             }
         }
 
@@ -172,7 +246,7 @@ class SmoothScrollGUI:
                 
                 # Try to check if process is still running using psutil
                 if psutil.pid_exists(pid):
-                    messagebox.showerror("Error", "Application is already running.")
+                    messagebox.showerror("Error", self.lang.get('error_already_running'))
                     sys.exit(1)
                 else:
                     # Stale lock file, remove it
@@ -201,11 +275,10 @@ class SmoothScrollGUI:
         self.auto_start = auto_start
         self.start_minimized = start_minimized
         self.lang = Lang('en')  # Default language
-
-        self.create_tray_icon()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.load_config()  # Load config first to set language
+        self.create_tray_icon()
         self.create_widgets()
         self.populate_apps_list()  # Populate after widgets are created
         self.update_gui_from_config()  # Update GUI after widgets are created
@@ -341,7 +414,7 @@ class SmoothScrollGUI:
             btn.destroy()
         self.app_buttons = []
         for i, app in enumerate(self.config.app_configs):
-            text = f"Path: {app.path or 'None'} | Regexp: {app.regexp.pattern if app.regexp else 'None'} | Enabled: {app.enabled}"
+            text = f"{self.lang.get('app_list_path')}: {app.path or 'None'} | {self.lang.get('app_list_regexp')}: {app.regexp.pattern if app.regexp else 'None'} | {self.lang.get('app_list_enabled')}: {app.enabled}"
             btn = ctk.CTkButton(self.apps_scrollable, text=text, command=lambda idx=i: self.select_app(idx))
             btn.pack(fill="x", pady=2)
             self.app_buttons.append(btn)
@@ -432,7 +505,7 @@ class SmoothScrollGUI:
 
         ctk.CTkLabel(frame, text=self.lang.get('language')).pack(anchor="w", pady=2)
         self.language_var = ctk.StringVar(value="en")
-        ctk.CTkOptionMenu(frame, variable=self.language_var, values=["en", "ru"], command=self.change_language).pack(fill="x", pady=2)
+        ctk.CTkOptionMenu(frame, variable=self.language_var, values=["en", "ru", "zh"], command=self.change_language).pack(fill="x", pady=2)
 
         ctk.CTkLabel(frame, text="").pack(pady=5)  # Spacer
         ctk.CTkLabel(frame, text=self.lang.get('app_settings')).pack(anchor="w", pady=5, padx=10)
@@ -455,7 +528,7 @@ class SmoothScrollGUI:
             ctk.set_default_color_theme("red.json")
         else:
             ctk.set_default_color_theme(theme)
-        messagebox.showinfo(self.lang.get('info'), self.lang.get('appearance_applied') + " Для полного обновления перезапустите приложение.")
+        messagebox.showinfo(self.lang.get('info'), self.lang.get('appearance_applied'))
 
     def load_config(self):
         config_path = os.path.join(get_app_directory(), "config.json")
@@ -631,8 +704,8 @@ class SmoothScrollGUI:
 
         # Create menu
         menu = pystray.Menu(
-            pystray.MenuItem("Открыть", self.show_window),
-            pystray.MenuItem("Закрыть", self.quit_app)
+            pystray.MenuItem(self.lang.get('tray_open'), self.show_window),
+            pystray.MenuItem(self.lang.get('tray_quit'), self.quit_app)
         )
 
         self.tray_icon = pystray.Icon("SmoothScroll", image, "SmoothScroll", menu)
