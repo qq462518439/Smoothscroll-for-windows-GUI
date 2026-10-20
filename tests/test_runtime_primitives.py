@@ -1,8 +1,10 @@
 import unittest
 import os
+import sys
 from queue import Queue
 from threading import Event, Lock
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from smoothscroll.smoothscroll import SmoothScroll
 from smoothscroll.utils.timer import Timer
@@ -204,6 +206,30 @@ class HookFailureTests(unittest.TestCase):
 
 
 class GuiCallbackTests(unittest.TestCase):
+    def test_visible_window_picker_collects_process_names(self):
+        from gui import SmoothScrollGUI
+
+        def enum_windows(callback, _extra):
+            callback(1, None)
+            callback(2, None)
+            callback(3, None)
+
+        fake_gui = SimpleNamespace(
+            EnumWindows=enum_windows,
+            IsWindowVisible=lambda hwnd: hwnd != 3,
+            GetWindowText=lambda hwnd: "visible" if hwnd != 2 else "",
+        )
+        fake_process = SimpleNamespace(
+            GetWindowThreadProcessId=lambda hwnd: (1, hwnd * 10),
+        )
+        process = lambda pid: SimpleNamespace(
+            name=lambda: {10: "ChatGPT.exe", 20: "Ignored.exe", 30: "Hidden.exe"}[pid]
+        )
+
+        with patch.dict(sys.modules, {"win32gui": fake_gui, "win32process": fake_process}), \
+             patch("gui.psutil.Process", side_effect=process):
+            self.assertEqual(SmoothScrollGUI.get_visible_window_exes(object()), ["ChatGPT"])
+
     def test_existing_instance_mutex_is_rejected_and_closed(self):
         from unittest.mock import patch
         from gui import _acquire_instance_mutex

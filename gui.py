@@ -1,5 +1,6 @@
 import json
 import customtkinter as ctk
+import psutil
 from tkinter import filedialog, messagebox, TclError
 from typing import Optional
 import easing_functions
@@ -422,14 +423,22 @@ class SmoothScrollGUI:
         import win32gui
         import win32process
         exes = set()
+
         def cb(hwnd, _):
-            if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd):
+            try:
+                if not win32gui.IsWindowVisible(hwnd) or not win32gui.GetWindowText(hwnd):
+                    return
                 _, pid = win32process.GetWindowThreadProcessId(hwnd)
-                try:
-                    name = psutil.Process(pid).name().replace('.exe', '')
-                    exes.add(name)
-                except:
-                    pass
+                if not pid:
+                    return
+                name = psutil.Process(pid).name()
+                if name:
+                    exes.add(os.path.splitext(name)[0])
+            except (OSError, psutil.Error):
+                # A process can exit or deny inspection while windows are
+                # enumerated. Skip that entry without discarding others.
+                return
+
         win32gui.EnumWindows(cb, None)
         return sorted(list(exes))
 
