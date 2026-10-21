@@ -371,31 +371,45 @@ class SmoothScrollGUI:
 
         ctk.CTkLabel(frame, text=self.lang.get('distance')).pack(anchor="w", pady=2)
         self.distance_var = ctk.StringVar(value=str(global_config.distance))
-        ctk.CTkEntry(frame, textvariable=self.distance_var).pack(fill="x", pady=2)
+        entry = ctk.CTkEntry(frame, textvariable=self.distance_var)
+        entry.pack(fill="x", pady=2)
+        self._bind_numeric_entry(entry, self.distance_var, self._parse_distance_input)
 
         ctk.CTkLabel(frame, text=self.lang.get('acceleration')).pack(anchor="w", pady=2)
-        self.acceleration_var = ctk.DoubleVar(value=global_config.acceleration)
-        ctk.CTkEntry(frame, textvariable=self.acceleration_var).pack(fill="x", pady=2)
+        self.acceleration_var = ctk.StringVar(value=str(global_config.acceleration))
+        entry = ctk.CTkEntry(frame, textvariable=self.acceleration_var)
+        entry.pack(fill="x", pady=2)
+        self._bind_numeric_entry(entry, self.acceleration_var, float)
 
         ctk.CTkLabel(frame, text=self.lang.get('opposite_acceleration')).pack(anchor="w", pady=2)
-        self.opposite_acceleration_var = ctk.DoubleVar(value=global_config.opposite_acceleration)
-        ctk.CTkEntry(frame, textvariable=self.opposite_acceleration_var).pack(fill="x", pady=2)
+        self.opposite_acceleration_var = ctk.StringVar(value=str(global_config.opposite_acceleration))
+        entry = ctk.CTkEntry(frame, textvariable=self.opposite_acceleration_var)
+        entry.pack(fill="x", pady=2)
+        self._bind_numeric_entry(entry, self.opposite_acceleration_var, float)
 
         ctk.CTkLabel(frame, text=self.lang.get('acceleration_delta')).pack(anchor="w", pady=2)
-        self.acceleration_delta_var = ctk.IntVar(value=int(global_config.acceleration_delta * 1000))
-        ctk.CTkEntry(frame, textvariable=self.acceleration_delta_var).pack(fill="x", pady=2)
+        self.acceleration_delta_var = ctk.StringVar(value=str(int(global_config.acceleration_delta * 1000)))
+        entry = ctk.CTkEntry(frame, textvariable=self.acceleration_delta_var)
+        entry.pack(fill="x", pady=2)
+        self._bind_numeric_entry(entry, self.acceleration_delta_var, int)
 
         ctk.CTkLabel(frame, text=self.lang.get('acceleration_max')).pack(anchor="w", pady=2)
-        self.acceleration_max_var = ctk.DoubleVar(value=global_config.acceleration_max)
-        ctk.CTkEntry(frame, textvariable=self.acceleration_max_var).pack(fill="x", pady=2)
+        self.acceleration_max_var = ctk.StringVar(value=str(global_config.acceleration_max))
+        entry = ctk.CTkEntry(frame, textvariable=self.acceleration_max_var)
+        entry.pack(fill="x", pady=2)
+        self._bind_numeric_entry(entry, self.acceleration_max_var, float)
 
         ctk.CTkLabel(frame, text=self.lang.get('duration')).pack(anchor="w", pady=2)
-        self.duration_var = ctk.IntVar(value=int(global_config.duration * 1000))
-        ctk.CTkEntry(frame, textvariable=self.duration_var).pack(fill="x", pady=2)
+        self.duration_var = ctk.StringVar(value=str(int(global_config.duration * 1000)))
+        entry = ctk.CTkEntry(frame, textvariable=self.duration_var)
+        entry.pack(fill="x", pady=2)
+        self._bind_numeric_entry(entry, self.duration_var, int)
 
         ctk.CTkLabel(frame, text=self.lang.get('pulse_scale')).pack(anchor="w", pady=2)
-        self.pulse_scale_var = ctk.DoubleVar(value=global_config.pulse_scale)
-        ctk.CTkEntry(frame, textvariable=self.pulse_scale_var).pack(fill="x", pady=2)
+        self.pulse_scale_var = ctk.StringVar(value=str(global_config.pulse_scale))
+        entry = ctk.CTkEntry(frame, textvariable=self.pulse_scale_var)
+        entry.pack(fill="x", pady=2)
+        self._bind_numeric_entry(entry, self.pulse_scale_var, float)
 
         self.inverted_var = ctk.BooleanVar(value=global_config.inverted)
         ctk.CTkCheckBox(frame, text=self.lang.get('inverted'), variable=self.inverted_var).pack(anchor="w", pady=2)
@@ -412,12 +426,33 @@ class SmoothScrollGUI:
         ctk.CTkOptionMenu(frame, variable=self.horizontal_key_var, values=key_options).pack(fill="x", pady=2)
 
         # 绑定所有参数自动保存
-        for var in [self.distance_var, self.acceleration_var, self.opposite_acceleration_var,
-                    self.acceleration_delta_var, self.acceleration_max_var, self.duration_var,
-                    self.pulse_scale_var, self.inverted_var, self.ease_var, self.horizontal_key_var]:
+        for var in [self.inverted_var, self.ease_var, self.horizontal_key_var]:
             var.trace_add("write", self.auto_save_config)
 
         # Remove autostart from global settings
+
+    @staticmethod
+    def _parse_distance_input(value):
+        value = value.strip()
+        if value.casefold() == "none":
+            return None
+        return float(value)
+
+    def _bind_numeric_entry(self, entry, variable, parser):
+        last_valid = [variable.get()]
+
+        def commit_on_focus_out(_event=None):
+            value = variable.get().strip()
+            try:
+                parser(value)
+            except ValueError:
+                variable.set(last_valid[0])
+                return
+            last_valid[0] = value
+            self.auto_save_config()
+
+        entry.bind("<FocusOut>", commit_on_focus_out, add="+")
+        return commit_on_focus_out
 
     def get_visible_window_exes(self):
         import win32gui
@@ -691,13 +726,17 @@ class SmoothScrollGUI:
 
     def update_global_config(self):
         global_config = self.config.app_configs[0].scroll_config
-        global_config.distance = None if self.distance_var.get() == "None" else float(self.distance_var.get())
-        global_config.acceleration = self.acceleration_var.get()
-        global_config.opposite_acceleration = self.opposite_acceleration_var.get()
-        global_config.acceleration_delta = self.acceleration_delta_var.get() / 1000
-        global_config.acceleration_max = self.acceleration_max_var.get()
-        global_config.duration = self.duration_var.get() / 1000
-        global_config.pulse_scale = self.pulse_scale_var.get()
+        values = {
+            "distance": self._parse_distance_input(self.distance_var.get()),
+            "acceleration": float(self.acceleration_var.get()),
+            "opposite_acceleration": float(self.opposite_acceleration_var.get()),
+            "acceleration_delta": int(self.acceleration_delta_var.get()) / 1000,
+            "acceleration_max": float(self.acceleration_max_var.get()),
+            "duration": int(self.duration_var.get()) / 1000,
+            "pulse_scale": float(self.pulse_scale_var.get()),
+        }
+        for name, value in values.items():
+            setattr(global_config, name, value)
         global_config.inverted = self.inverted_var.get()
 
         # Update ease
@@ -748,6 +787,9 @@ class SmoothScrollGUI:
             if self.smooth_scroll:
                 self.smooth_scroll.update_config(self.config)
             return True
+        except ValueError:
+            # Empty or partially typed numeric fields are normal while editing.
+            return False
         except Exception as e:
             messagebox.showerror(self.lang.get('error'), str(e))
             return False

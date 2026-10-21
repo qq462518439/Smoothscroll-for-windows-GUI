@@ -356,7 +356,7 @@ class GuiCallbackTests(unittest.TestCase):
         self.assertFalse(_is_widget_within(neighboring_row, row))
         self.assertFalse(_is_widget_within(None, row))
 
-    def test_invalid_global_value_is_reported_without_escaping_save_callback(self):
+    def test_invalid_global_value_is_ignored_without_popup_during_editing(self):
         from unittest.mock import patch
         from types import SimpleNamespace
         from gui import SmoothScrollGUI
@@ -366,10 +366,58 @@ class GuiCallbackTests(unittest.TestCase):
         app.update_global_config = lambda: (_ for _ in ()).throw(ValueError("invalid value"))
         app.lang = SimpleNamespace(get=lambda key: key)
         with patch("gui.messagebox.showerror") as showerror:
-            app._write_config()
+            self.assertFalse(app._write_config())
 
         self.assertIsNone(app.save_timer)
-        showerror.assert_called_once()
+        showerror.assert_not_called()
+
+    def test_empty_numeric_field_does_not_partially_update_global_config(self):
+        from types import SimpleNamespace
+        from gui import SmoothScrollGUI
+
+        original = SimpleNamespace(
+            distance=120,
+            acceleration=1.0,
+            opposite_acceleration=1.2,
+            acceleration_delta=0.07,
+            acceleration_max=14.0,
+            duration=0.2,
+            pulse_scale=3.0,
+            inverted=False,
+            ease=SimpleNamespace(),
+            horizontal_scroll_key=16,
+        )
+        app = SmoothScrollGUI.__new__(SmoothScrollGUI)
+        app.config = SimpleNamespace(app_configs=[SimpleNamespace(scroll_config=original)])
+        app.distance_var = SimpleNamespace(get=lambda: "")
+
+        with self.assertRaises(ValueError):
+            SmoothScrollGUI.update_global_config(app)
+
+        self.assertEqual(original.distance, 120)
+        self.assertEqual(original.acceleration, 1.0)
+
+    def test_empty_numeric_entry_restores_last_valid_value_on_focus_out(self):
+        from types import SimpleNamespace
+        from gui import SmoothScrollGUI
+
+        bindings = {}
+        saves = []
+        variable = SimpleNamespace(value="12.5", get=lambda: variable.value, set=lambda value: setattr(variable, "value", value))
+        entry = SimpleNamespace(bind=lambda sequence, callback, add=None: bindings.setdefault(sequence, callback))
+        app = SmoothScrollGUI.__new__(SmoothScrollGUI)
+        app.auto_save_config = lambda: saves.append(variable.value)
+
+        SmoothScrollGUI._bind_numeric_entry(app, entry, variable, float)
+        variable.value = ""
+        bindings["<FocusOut>"]()
+        self.assertEqual(variable.value, "12.5")
+        self.assertEqual(saves, [])
+
+        variable.value = "14.25"
+        bindings["<FocusOut>"]()
+        self.assertEqual(variable.value, "14.25")
+        self.assertEqual(saves, ["14.25"])
 
     def test_delete_removes_the_selected_rule_object(self):
         from types import SimpleNamespace
